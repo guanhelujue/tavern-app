@@ -1,0 +1,90 @@
+{
+  "expo": {
+    "name": "酒馆",
+    "slug": "tavern-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "tavernapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/images/icon.png",
+      "supportsTablet": false
+    },
+    "android": {
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "package": "com.guanhelujue.tavernapp",
+      "icon": "./assets/images/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#12100F"
+      }
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#12100F",
+          "image": "./assets/images/splash-solid.png",
+          "imageWidth": 1
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "需要访问相册，以便为小说设置封面与对话背景。",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": false,
+          "savePhotosPermission": "需要保存权限，以便把角色立绘写入系统相册。",
+          "granularPermissions": [
+            "photo"
+          ]
+        }
+      ],
+      [
+        "./plugins/withApkName.js",
+        {
+          "name": "guanhelujue"
+        }
+      ],
+      "./plugins/withAndroidForegroundService.js",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
+        }
+      ],
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-video",
+      "expo-image",
+      "expo-web-browser",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0d8f1a09-bb86-4cd2-b0b6-424764f9ed35"
+      }
+    }
+  }
+}

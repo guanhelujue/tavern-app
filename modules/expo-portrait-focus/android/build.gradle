@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.portraitfocus'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.portraitfocus"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  implementation 'com.google.mlkit:face-detection:16.1.7'
+}

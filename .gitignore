@@ -1,0 +1,72 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Local agent, editor, and IDE state
+.agents/
+.claude/
+.codex/
+.idea/
+.vscode/
+AGENTS.md
+CLAUDE.md
+
+# Expo
+.expo/
+.expo-export-*/
+dist/
+web-build/
+.full-test-artifacts/
+expo-env.d.ts
+_autolinking.json
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# Tests and development-only harnesses
+**/*.test.*
+**/*.spec.*
+**/__tests__/
+vitest.config.*
+/prototypes/
+/real-device-clipboard/
+
+# Local planning and review notes
+/docs/
+/plan*.md
+/CONTEXT.md
+/BUILD*.md
+
+# Generated local-module outputs
+/modules/**/android/build/
+
+example
+
+# generated native folders
+/ios
+/android

@@ -1,0 +1,7 @@
+{
+  "name": "expo-portrait-focus",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "license": "MIT"
+}

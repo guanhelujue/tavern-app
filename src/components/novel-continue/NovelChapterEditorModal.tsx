@@ -1,0 +1,612 @@
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Keyboard,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { NovelFormField } from '@/components/novel-create/NovelFormField';
+import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
+import { ThemedText } from '@/components/themed-text';
+import { Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
+import { useTavernStore } from '@/store/tavern-store';
+import type { NovelAuditIssue, NovelChapter } from '@/types/tavern';
+import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
+
+const AUDIT_CATEGORY_LABELS: Record<NovelAuditIssue['category'], string> = {
+  consistency: '一致性',
+  rhythm: '节奏',
+  continuity: '连贯',
+  character: '人物',
+  foreshadowing: '伏笔',
+  structure: '结构',
+};
+
+type NovelChapterEditorModalProps = {
+  visible: boolean;
+  novelId: string;
+  chapter: NovelChapter | null;
+  onClose: () => void;
+};
+
+export function NovelChapterEditorModal({
+  visible,
+  novelId,
+  chapter,
+  onClose,
+}: NovelChapterEditorModalProps) {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
+  const updateNovelChapter = useTavernStore((state) => state.updateNovelChapter);
+  const finalizeNovelChapter = useTavernStore((state) => state.finalizeNovelChapter);
+  const deleteNovelChapter = useTavernStore((state) => state.deleteNovelChapter);
+  const auditNovelChapter = useTavernStore((state) => state.auditNovelChapter);
+  const auditRewriteChapter = useTavernStore((state) => state.auditRewriteChapter);
+  const reviseNovelChapter = useTavernStore((state) => state.reviseNovelChapter);
+  const backupNovelChapter = useTavernStore((state) => state.backupNovelChapter);
+  const rollbackNovelChapter = useTavernStore((state) => state.rollbackNovelChapter);
+
+  const [title, setTitle] = useState('');
+  const [summary, setSummary] = useState('');
+  const [goal, setGoal] = useState('');
+  const [content, setContent] = useState('');
+  const [operation, setOperation] = useState<'audit' | 'revise' | 'finalize' | 'delete' | 'rollback' | null>(null);
+  const isAuditing = operation === 'audit';
+  const isAiRevising = operation === 'revise';
+  const isFinalizing = operation !== null && !isAuditing && !isAiRevising;
+  const [isDirty, setIsDirty] = useState(false);
+  const operationToken = useRef(0);
+  const activeOperation = useRef<number | null>(null);
+  const editorKey = useRef<string | null>(null);
+  const closePending = useRef(false);
+
+  useEffect(() => {
+    if (!visible || !chapter) {
+      editorKey.current = null;
+      activeOperation.current = null;
+      operationToken.current += 1;
+      return;
+    }
+    const key = `${novelId}:${chapter.id}`;
+    const newSession = editorKey.current !== key;
+    if (newSession) {
+      editorKey.current = key;
+      operationToken.current += 1;
+      activeOperation.current = null;
+    }
+    if (newSession || (!isDirty && activeOperation.current === null)) {
+      // Initialize a new editor, or refresh a clean draft after an operation.
+      setTitle(chapter.title);
+      setSummary(chapter.summary);
+      setGoal(chapter.goal);
+      setContent(chapter.content);
+      setIsDirty(false);
+      if (newSession) setOperation(null);
+    }
+  }, [visible, novelId, chapter, isDirty, operation]);
+
+  useEffect(() => () => {
+    operationToken.current += 1;
+    activeOperation.current = null;
+    editorKey.current = null;
+  }, []);
+
+  const audits = useMemo(
+    () => (novel?.audits ?? []).filter((item) => item.chapterId === chapter?.id).slice(0, 3),
+    [novel?.audits, chapter?.id],
+  );
+  const rewriteAudits = useMemo(
+    () =>
+      (novel?.novelRewriteAudits ?? [])
+        .filter((item) => item.chapterId === chapter?.id)
+        .slice(0, 3),
+    [novel?.novelRewriteAudits, chapter?.id],
+  );
+  const backups = useMemo(
+    () => (novel?.chapterBackups ?? []).filter((item) => item.chapterId === chapter?.id).slice(-8),
+    [novel?.chapterBackups, chapter?.id],
+  );
+
+  const currentChapter = chapter;
+
+  if (!currentChapter) {
+    return null;
+  }
+
+  const activeChapter: NovelChapter = currentChapter;
+
+  function setDirtyFor(next: Partial<Pick<NovelChapter, 'title' | 'summary' | 'goal' | 'content'>>) {
+    setIsDirty(
+      (next.title ?? title) !== activeChapter.title ||
+        (next.summary ?? summary) !== activeChapter.summary ||
+        (next.goal ?? goal) !== activeChapter.goal ||
+        (next.content ?? content) !== activeChapter.content,
+    );
+  }
+
+  const charCount = content.replace(/\s/g, '').length;
+
+  function beginOperation(kind: NonNullable<typeof operation>) {
+    if (activeOperation.current !== null) return null;
+    const token = ++operationToken.current;
+    activeOperation.current = token;
+    Keyboard.dismiss();
+    setOperation(kind);
+    return token;
+  }
+
+  function isCurrentOperation(token: number) {
+    return activeOperation.current === token && operationToken.current === token &&
+      editorKey.current === `${novelId}:${activeChapter.id}`;
+  }
+
+  function finishOperation(token: number) {
+    if (!isCurrentOperation(token)) return;
+    activeOperation.current = null;
+    setOperation(null);
+  }
+
+  function closeEditor() {
+    operationToken.current += 1;
+    activeOperation.current = null;
+    editorKey.current = null;
+    setOperation(null);
+    setIsDirty(false);
+    onClose();
+  }
+
+  function handleSave() {
+    if (activeOperation.current !== null) return;
+    updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
+    setIsDirty(false);
+    showAppAlert('已保存', '章节内容已更新。');
+  }
+
+  async function requestClose() {
+    if (closePending.current) return;
+    Keyboard.dismiss();
+    if (!isDirty) {
+      closeEditor();
+      return;
+    }
+    closePending.current = true;
+    try {
+      if (await confirmAppAction('放弃未保存修改？', '关闭后当前章节编辑将丢失。', { confirmLabel: '放弃修改', cancelLabel: '继续编辑' })) {
+        closeEditor();
+      }
+    } finally {
+      closePending.current = false;
+    }
+  }
+
+  async function handleFinalize() {
+    const token = beginOperation('finalize');
+    if (token === null) return;
+    try {
+      const confirmed = await confirmAppAction('采纳定稿', `将把「${title || `第${activeChapter.index}章`}」从草稿提升为定稿。确定吗？`, { confirmLabel: '定稿' });
+      if (!confirmed || !isCurrentOperation(token)) return;
+      if (isDirty) {
+        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
+        setIsDirty(false);
+      }
+      backupNovelChapter(novelId, activeChapter.id);
+      await finalizeNovelChapter(novelId, activeChapter.id);
+      if (isCurrentOperation(token)) showAppAlert('已定稿', '本章已提升为定稿。');
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert('定稿失败', error instanceof Error ? error.message : '章节提交失败，请重试。');
+    } finally {
+      finishOperation(token);
+    }
+  }
+
+  async function handleDelete() {
+    const token = beginOperation('delete');
+    if (token === null) return;
+    try {
+      const confirmed = await confirmAppAction('删除章节', `删除「${title || `第${activeChapter.index}章`}」？此操作不可撤销。`, { confirmLabel: '删除' });
+      if (confirmed && isCurrentOperation(token)) {
+        deleteNovelChapter(novelId, activeChapter.id);
+        closeEditor();
+      }
+    } finally {
+      finishOperation(token);
+    }
+  }
+
+  async function handleAudit() {
+    const token = beginOperation('audit');
+    if (token === null) return;
+    try {
+      if (isDirty) {
+        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
+        setIsDirty(false);
+      }
+      await auditNovelChapter(novelId, activeChapter.id);
+      if (isCurrentOperation(token)) showAppAlert('审查完成', '已生成该章审查报告，可在下方查看。');
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert(
+        '审查失败',
+        error instanceof Error ? error.message : '审查失败，请稍后重试。',
+      );
+    } finally {
+      finishOperation(token);
+    }
+  }
+
+  async function handleAiRevise() {
+    const token = beginOperation('revise');
+    if (token === null) return;
+    try {
+      // 未保存的编辑先落库，确保基于最新正文修订。
+      if (isDirty) {
+        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
+        setIsDirty(false);
+      }
+      // 复用 8 维 LLM 审查：无记录时先生成一次。
+      const hasRewriteAudit = (novel?.novelRewriteAudits ?? []).some(
+        (item) => item.chapterId === activeChapter.id,
+      );
+      if (isDirty || !hasRewriteAudit) {
+        await auditRewriteChapter(novelId, activeChapter.id);
+      }
+      if (!isCurrentOperation(token)) return;
+      // 修订后自动复查，仅采用明显更优的版本（保留原稿）。
+      const result = await reviseNovelChapter(novelId, activeChapter.id);
+      if (!isCurrentOperation(token)) return;
+      showAppAlert(
+        'AI 修订完成',
+        result.adopted
+          ? `已采用修订版（新评分 ${result.score} 分），并在下方生成最新审查报告。`
+          : `修订版未明显优于原稿，已保留原版本（候选修订评分 ${result.score} 分）。`,
+      );
+      // 用修订后的内容刷新编辑区。
+      const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
+      const refreshed = (latest?.chapters ?? []).find((item) => item.id === activeChapter.id);
+      if (refreshed) {
+        setTitle(refreshed.title);
+        setSummary(refreshed.summary);
+        setGoal(refreshed.goal);
+        setContent(refreshed.content);
+      }
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert(
+        'AI 修订失败',
+        error instanceof Error ? error.message : 'AI 修订失败，请稍后重试。',
+      );
+    } finally {
+      finishOperation(token);
+    }
+  }
+
+  async function handleRollback(backupId: string) {
+    const token = beginOperation('rollback');
+    if (token === null) return;
+    try {
+      const confirmed = await confirmAppAction('回退版本', '将恢复备份中的正文和章节信息；已定稿章节会成为草稿，需要重新采纳定稿。确定吗？', { confirmLabel: '回退' });
+      if (!confirmed || !isCurrentOperation(token)) return;
+      rollbackNovelChapter(novelId, activeChapter.id, backupId);
+      setIsDirty(false);
+    } finally {
+      finishOperation(token);
+    }
+  }
+
+  return (
+    <KeyboardSafeModal
+      visible={visible}
+      onRequestClose={() => void requestClose()}
+      scrollable>
+      <View style={[styles.overlay, { backgroundColor: theme.scrim }]}> 
+        <SafeAreaContainer insets={insets}>
+          <View style={[styles.sheet, { backgroundColor: theme.background, borderColor: theme.border }]}>
+            <View style={[styles.handle, { backgroundColor: theme.border }]} />
+            <View style={styles.header}>
+              <View style={styles.headerText}>
+                <ThemedText type="smallBold">
+                  {currentChapter.status === 'draft' ? '草稿' : '定稿'} · 第{activeChapter.index}章
+                </ThemedText>
+                <ThemedText type="small" themeColor="textMuted">
+                  {charCount} 字
+                </ThemedText>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="关闭章节编辑" onPress={() => void requestClose()} hitSlop={10} style={styles.closeButton}>
+                <ThemedText style={{ color: theme.textMuted }}>✕</ThemedText>
+              </Pressable>
+            </View>
+
+            <ScrollView
+              style={styles.body}
+              contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 24 }]}
+              keyboardShouldPersistTaps="handled">
+              <NovelFormField
+                label="章名"
+                value={title}
+                placeholder={`第${activeChapter.index}章`}
+                editable={!isAuditing && !isAiRevising && !isFinalizing}
+                onChangeText={(value) => {
+                  setTitle(value);
+                  setDirtyFor({ title: value });
+                }}
+              />
+              <NovelFormField
+                label="本章摘要"
+                value={summary}
+                placeholder="一句话概括本章发生了什么（用于上下文注入）"
+                multiline
+                editable={!isAuditing && !isAiRevising && !isFinalizing}
+                minHeight={56}
+                onChangeText={(value) => {
+                  setSummary(value);
+                  setDirtyFor({ summary: value });
+                }}
+              />
+              <NovelFormField
+                label="本章目标"
+                value={goal}
+                placeholder="本章要推进什么 / 埋下什么钩子"
+                multiline
+                editable={!isAuditing && !isAiRevising && !isFinalizing}
+                minHeight={56}
+                onChangeText={(value) => {
+                  setGoal(value);
+                  setDirtyFor({ goal: value });
+                }}
+              />
+              <NovelFormField
+                label="正文"
+                value={content}
+                placeholder="本章正文……"
+                multiline
+                editable={!isAuditing && !isAiRevising && !isFinalizing}
+                minHeight={240}
+                onChangeText={(value) => {
+                  setContent(value);
+                  setDirtyFor({ content: value });
+                }}
+              />
+              <View style={styles.actions}>
+                <ActionButton
+                  label={isDirty ? '保存修改' : '已保存'}
+                  onPress={handleSave}
+                  disabled={!isDirty || isAuditing || isAiRevising || isFinalizing}
+                  tone="primary"
+                />
+                {currentChapter.status === 'draft' ? (
+                  <ActionButton
+                    label="采纳定稿"
+                    onPress={handleFinalize}
+                    tone="accent"
+                    disabled={isAuditing || isAiRevising || isFinalizing}
+                  />
+                ) : null}
+                {currentChapter.status === 'draft' ? (
+                  <ActionButton
+                    label={isAiRevising ? 'AI 修订中…' : 'AI 修订'}
+                    onPress={() => void handleAiRevise()}
+                    disabled={isAiRevising || isAuditing || isFinalizing}
+                  />
+                ) : null}
+                <ActionButton
+                  label={isAuditing ? '审查中…' : '规则 + LLM 审查'}
+                  onPress={() => void handleAudit()}
+                  disabled={isAuditing || isAiRevising || isFinalizing}
+                />
+                <ActionButton label="删除章节" onPress={handleDelete} tone="danger" disabled={isAuditing || isAiRevising || isFinalizing} />
+              </View>
+
+              {audits.length > 0 ? (
+                <View style={styles.section}>
+                  <ThemedText type="smallBold">最近审查</ThemedText>
+                  {audits.map((audit) => (
+                    <View
+                      key={audit.id}
+                      style={[
+                        styles.auditCard,
+                        { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                      ]}>
+                      <ThemedText type="small">
+                        {audit.passed
+                          ? '✅ 未发现一致性问题'
+                          : `⚠️ ${audit.issues.length} 项问题`}
+                      </ThemedText>
+                      {audit.issues.slice(0, 6).map((issue) => (
+                        <ThemedText key={issue.id} type="small" themeColor="textMuted">
+                          · [{AUDIT_CATEGORY_LABELS[issue.category]} ·{' '}
+                          {issue.severity === 'high' ? '高' : issue.severity === 'medium' ? '中' : '低'}]
+                          {issue.message}
+                        </ThemedText>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {rewriteAudits.length > 0 ? (
+                <View style={styles.section}>
+                  <ThemedText type="smallBold">AI 审查报告（8 维）</ThemedText>
+                  {rewriteAudits.map((audit) => (
+                    <View
+                      key={audit.auditId}
+                      style={[
+                        styles.auditCard,
+                        { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                      ]}>
+                      <ThemedText type="small">
+                        {audit.passed
+                          ? `✅ 审查通过（${audit.score} 分）`
+                          : `⚠️ ${audit.issues.length} 项问题（${audit.score} 分）`}
+                      </ThemedText>
+                      {audit.issues.slice(0, 6).map((issue) => (
+                        <ThemedText key={issue.id} type="small" themeColor="textMuted">
+                          · [{issue.severity} · {issue.category}]{issue.description}
+                          {issue.repairScope === 'structural' ? '（需确认）' : ''}
+                        </ThemedText>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {backups.length > 0 ? (
+                <View style={styles.section}>
+                  <ThemedText type="smallBold">历史版本（回退）</ThemedText>
+                  {backups
+                    .slice()
+                    .reverse()
+                    .map((backup) => (
+                      <Pressable
+                        key={backup.id}
+                        onPress={() => handleRollback(backup.id)}
+                        style={({ pressed }) => [
+                          styles.backupRow,
+                          { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                          pressed && { opacity: 0.7 },
+                        ]}>
+                        <ThemedText type="small">{backup.title}</ThemedText>
+                        <ThemedText type="small" themeColor="textMuted">
+                          {new Date(backup.createdAt).toLocaleString()}
+                        </ThemedText>
+                      </Pressable>
+                    ))}
+                </View>
+              ) : null}
+            </ScrollView>
+          </View>
+        </SafeAreaContainer>
+      </View>
+    </KeyboardSafeModal>
+  );
+}
+
+function SafeAreaContainer({
+  insets,
+  children,
+}: {
+  insets: { top: number; bottom: number };
+  children: ReactNode;
+}) {
+  return (
+    <View style={[styles.safeArea, { paddingTop: insets.top + 40 }]}>{children}</View>
+  );
+}
+
+function ActionButton({
+  label,
+  onPress,
+  disabled,
+  tone = 'default',
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  tone?: 'default' | 'primary' | 'accent' | 'danger';
+}) {
+  const theme = useTheme();
+  const colors = {
+    default: theme.backgroundElement,
+    primary: theme.accent,
+    accent: theme.accentMuted,
+    danger: 'rgba(196, 92, 58, 0.12)',
+  };
+  const textColors = {
+    default: theme.text,
+    primary: '#120c09',
+    accent: theme.accent,
+    danger: '#c45c3a',
+  };
+
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionButton,
+        { backgroundColor: colors[tone], borderColor: theme.border },
+        pressed && { opacity: 0.7 },
+        disabled && { opacity: 0.4 },
+      ]}>
+      <ThemedText type="smallBold" style={{ color: textColors[tone] }}>
+        {label}
+      </ThemedText>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+  },
+  sheet: {
+    flex: 1,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 8,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+  },
+  headerText: {
+    gap: 2,
+  },
+  closeButton: {
+    padding: 8,
+  },
+  body: {
+    flex: 1,
+  },
+  bodyContent: {
+    padding: Spacing.three,
+    gap: Spacing.three,
+  },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  actionButton: {
+    minHeight: 40,
+    paddingHorizontal: Spacing.three,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  section: {
+    gap: Spacing.two,
+  },
+  auditCard: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.two,
+    gap: 4,
+  },
+  backupRow: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.two,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+});
