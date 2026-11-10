@@ -43,6 +43,7 @@ export type CreationEvent =
   | { type: 'generate-ideas' }
   | { type: 'choose-idea'; id: string }
   | { type: 'start-blank' }
+  | { type: 'resume-blueprint' }
   | { type: 'edit-blueprint'; patch: Partial<Omit<StoryBlueprint, 'protagonist'>> & { protagonist?: Partial<StoryProtagonist> } }
   | { type: 'back-to-seed' }
   | { type: 'restart' };
@@ -80,14 +81,8 @@ export function createEmptyCreationSession(): CreationSession {
 
 export function validateBlueprint(blueprint: StoryBlueprint): string[] {
   const missing: string[] = [];
-  if (!blueprint.title.trim()) missing.push('书名');
-  if (!blueprint.premise.trim()) missing.push('故事前提');
-  if (!blueprint.protagonist.desire.trim()) missing.push('主角欲望');
-  if (!blueprint.protagonist.obstacle.trim()) missing.push('核心阻力');
-  if (!blueprint.opening.trim()) missing.push('开篇场景');
-  if (!blueprint.longForm.engine.trim()) missing.push('长篇故事引擎');
-  if (blueprint.longForm.arcs.filter((item) => item.trim()).length < 3) missing.push('至少三个阶段推进');
-  if (blueprint.longForm.openThreads.filter((item) => item.trim()).length < 3) missing.push('至少三条长期悬念');
+  if (!blueprint.title.trim()) missing.push('世界名称');
+  if (!blueprint.setting.trim()) missing.push('世界内容');
   return missing;
 }
 

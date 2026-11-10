@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 
 type TabIconProps = {
   color: ColorValue;
@@ -37,6 +38,7 @@ function TabIcon({ color, focused, label, name }: TabIconProps) {
 
 export default function TabsLayout() {
   const theme = useTheme();
+  const desktop = useDesktopLayout();
   const insets = useSafeAreaInsets();
   const dockBottom = Math.max(insets.bottom, Platform.OS === 'web' ? 12 : 8);
 
@@ -46,7 +48,7 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.textMuted,
-        tabBarStyle: {
+        tabBarStyle: desktop ? { display: 'none' } : {
           backgroundColor: theme.surfaceElevated,
           borderColor: theme.outlineVariant,
           borderWidth: StyleSheet.hairlineWidth,

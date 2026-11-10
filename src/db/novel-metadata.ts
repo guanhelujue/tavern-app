@@ -50,7 +50,7 @@ export function serializeNovelMetadata(value: Record<string, unknown>) {
 }
 
 export function serializeChapterMetadata(value: Record<string, unknown>) {
-  const keys = ['id', 'index', 'chapterIndex', 'title', 'summary', 'goal', 'status', 'createdAt', 'updatedAt'];
+  const keys = ['id', 'index', 'chapterIndex', 'title', 'summary', 'goal', 'planning', 'targetWords', 'status', 'createdAt', 'updatedAt'];
   const metadata: Record<string, unknown> = { schema: 'chapter-metadata-v2' };
   for (const key of keys) {
     if (key in value) {

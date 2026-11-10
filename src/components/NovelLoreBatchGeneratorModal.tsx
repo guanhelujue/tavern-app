@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedView } from '@/components/themed-view';
 import {
   MAX_NOVEL_LORE_BATCH_TOTAL,
@@ -139,20 +140,19 @@ export function NovelLoreBatchGeneratorModal({
       setError(`单次最多生成 ${MAX_NOVEL_LORE_BATCH_TOTAL} 条设定。`);
       return;
     }
-    const apiSettings = resolveApiSettings(providers, generationSettings, {
-      purpose: 'utility',
-    });
-    if (!apiSettings.apiKey.trim()) {
-      showAppAlert('未配置 API Key', '请先在系统设置中填写小模型或默认厂商的 API Key。');
-      return;
-    }
-
     setIsGenerating(true);
     setError('');
     setDrafts([]);
     setDraftAliasTexts({});
     setSelectedIds(new Set());
     try {
+      const apiSettings = resolveApiSettings(providers, generationSettings, {
+        task: 'world', purpose: 'utility',
+    });
+    if (!apiSettings.apiKey.trim()) {
+      showAppAlert('未配置 API Key', '请先在系统设置中填写小模型或默认厂商的 API Key。');
+      return;
+    }
       const counts = Object.fromEntries(
         NOVEL_LORE_TYPES.map((type) => [
           type,
@@ -298,6 +298,7 @@ export function NovelLoreBatchGeneratorModal({
               <ThemedText type="small" themeColor="textSecondary">
                 先生成候选，审阅后再加入设定库。
               </ThemedText>
+              <TaskModelSelector task="world" disabled={isGenerating} />
             </View>
             <Pressable
               onPress={() => {

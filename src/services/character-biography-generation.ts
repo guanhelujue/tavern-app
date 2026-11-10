@@ -1,4 +1,4 @@
-import { requestCompletionWithUsage } from './llm';
+import { isTruncationFinishReason, requestCompletionWithUsage } from './llm';
 import type { CharacterDossierV2 } from '../types/character-dossier-v2';
 import type { ApiSettings, ContentStyleSettings, NovelCastCharacter } from '../types/tavern';
 import { buildWritingPromptExtensionBlocks } from '../utils/writing-prompt-extensions';
@@ -18,6 +18,7 @@ export const CHARACTER_BIOGRAPHY_SYSTEM_PROMPT = `你是一名擅长人物塑造
 {"title":"小传标题","content":"小传正文"}`;
 
 function extractBiographyPayload(content: string) {
+  if (!content.trim()) throw new Error('模型没有返回小传正文，请重新生成。');
   const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
@@ -28,12 +29,13 @@ function extractBiographyPayload(content: string) {
       const raw = asRecord(JSON.parse(candidate));
       const title = asString(raw.title).trim();
       const body = asString(raw.content).trim();
-      if (body) return { title: title || '未命名小传', content: body };
+      if (body) return { title: title || '未命名小传', content: body, usedRawResponse: false };
     } catch {
       // Try the bounded JSON candidate next.
     }
   }
-  throw new Error('AI 返回的小传无法解析，请重新生成。');
+  // Keep the complete response (including fences or multiple pieces) for manual editing.
+  return { title: '未命名小传', content, usedRawResponse: true };
 }
 
 function characterReference(
@@ -79,12 +81,15 @@ export async function generateCharacterBiography({
 }) {
   const authorRequest = request.trim();
   if (!authorRequest) throw new Error('请先写下你想看的内容。');
+  const outputBudget = typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0
+    ? Math.max(1600, Math.round(maxTokens))
+    : 8000;
 
   const result = await requestCompletionWithUsage({
     apiSettings: { ...apiSettings, streamingEnabled: false },
     purpose: 'create-character-biography',
     temperature: Math.max(0.72, Math.min(apiSettings.temperature, 1.02)),
-    maxTokens: Math.max(1600, Math.min(maxTokens ?? 8000, 12000)),
+    maxTokens: outputBudget,
     messages: [
       { role: 'system', content: CHARACTER_BIOGRAPHY_SYSTEM_PROMPT },
       {
@@ -100,6 +105,7 @@ export async function generateCharacterBiography({
 
   return {
     ...extractBiographyPayload(result.content),
+    truncated: isTruncationFinishReason(result.finishReason),
     promptTokens: result.promptTokens ?? 0,
     completionTokens: result.completionTokens ?? 0,
   };

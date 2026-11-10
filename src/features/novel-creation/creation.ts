@@ -92,7 +92,6 @@ export function createNovelCreation({
           return persist(nextSession(session, {
             step: 'ideas',
             proposals: proposals.slice(0, 3),
-            blueprint: undefined,
             error: undefined,
           }));
         } catch (error) {
@@ -114,8 +113,19 @@ export function createNovelCreation({
           error: undefined,
         }));
       }
+      if (event.type === 'resume-blueprint') {
+        return persist(nextSession(session, {
+          step: 'blueprint',
+          blueprint: session.blueprint ?? { ...createEmptyBlueprint(), setting: session.seed },
+          error: undefined,
+        }));
+      }
       if (event.type === 'back-to-seed') {
-        return persist(nextSession(session, { step: 'seed', blueprint: undefined, error: undefined }));
+        return persist(nextSession(session, {
+          step: 'seed',
+          seed: session.seed || session.blueprint?.setting || '',
+          error: undefined,
+        }));
       }
 
       const empty = createEmptyCreationSession();
@@ -124,7 +134,7 @@ export function createNovelCreation({
     },
 
     async commit(session) {
-      if (!session.blueprint) throw new Error('请先完成故事蓝图。');
+      if (!session.blueprint) throw new Error('请先填写世界名称和世界内容。');
       const missing = validateBlueprint(session.blueprint);
       if (missing.length > 0) throw new Error(`请补全：${missing.join('、')}。`);
       const novelId = await commitNovel(session.blueprint);

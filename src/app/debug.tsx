@@ -18,6 +18,7 @@ import {
 } from '@/services/debug-request-history';
 import { useTavernStore } from '@/store/tavern-store';
 import { confirmAppAction } from '@/utils/app-alert';
+import { formatImageDebugStep } from '@/services/image-request-trace';
 
 // ── Observatory console palette ──
 const C = {
@@ -47,6 +48,7 @@ const CATEGORY_FILTERS: { key: DebugRequestCategory; label: string }[] = [
   { key: 'writing', label: 'WRITE' },
   { key: 'collaboration', label: 'COLLAB' },
   { key: 'support', label: 'AUX' },
+  { key: 'image', label: 'IMAGE / 生图' },
 ];
 
 function timeLabel(iso: string): string {
@@ -63,7 +65,7 @@ function tagColor(tag: DebugRequestCategory): string {
 
 function formatDebugSnapshotForClipboard(snapshot: DebugRequestSnapshot): string {
   const lines = [
-    `[${timeLabel(snapshot.at)}] ${snapshot.error ? '[ERR]' : '[OK ]'}`,
+    `[${timeLabel(snapshot.at)}] ${snapshot.status ?? (snapshot.error ? 'error' : 'success')}`,
     `provider: ${snapshot.providerName ?? 'unknown'}`,
     `model: ${snapshot.model}`,
     `purpose: ${getPurposeLabel(snapshot.purpose)}`,
@@ -78,6 +80,10 @@ function formatDebugSnapshotForClipboard(snapshot: DebugRequestSnapshot): string
     );
   }
   if (snapshot.error) lines.push(`\n## error\n${snapshot.error}`);
+  if (snapshot.phase) lines.push(`phase: ${snapshot.phase}`);
+  if (snapshot.promptId) lines.push(`prompt_id: ${snapshot.promptId}`);
+  if (snapshot.durationMs !== undefined) lines.push(`duration: ${snapshot.durationMs} ms`);
+  if (snapshot.steps) lines.push('\n## 调用链路（密钥与图片数据已省略）', ...snapshot.steps.map(formatImageDebugStep));
 
   lines.push(
     '\n## request',
@@ -113,8 +119,10 @@ function TerminalLogEntry({
   const purpose = getPurposeLabel(snapshot.purpose);
   const accent = tagColor(tag);
 
-  const statusIcon = hasError ? '[ERR]' : '[OK ]';
-  const statusColor = hasError ? C.red : C.green;
+  const pending = snapshot.status === 'pending';
+  const cancelled = snapshot.status === 'cancelled';
+  const statusIcon = pending ? '[RUN]' : cancelled ? '[STOP]' : hasError ? '[ERR]' : '[OK ]';
+  const statusColor = pending || cancelled ? C.amber : hasError ? C.red : C.green;
 
   const handleCopy = useCallback(async () => {
     await Clipboard.setStringAsync(formatDebugSnapshotForClipboard(snapshot));
@@ -182,7 +190,7 @@ function TerminalLogEntry({
       {/* One-liner summary */}
       <View style={styles.logMeta}>
         <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
-          msgs:{snapshot.messages.length}
+          {snapshot.steps ? `steps:${snapshot.steps.length}` : `msgs:${snapshot.messages.length}`}
         </ThemedText>
         {hasResponse && (
           <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
@@ -210,6 +218,13 @@ function TerminalLogEntry({
         </ThemedText>
       </View>
 
+      {snapshot.phase ? (
+        <ThemedText type="code" style={{ color: statusColor, fontSize: 11 }}>
+          {snapshot.phase}{snapshot.durationMs !== undefined ? ` · ${(snapshot.durationMs / 1000).toFixed(1)}s` : ''}
+          {snapshot.promptId ? ` · prompt_id: ${snapshot.promptId}` : ''}
+        </ThemedText>
+      ) : null}
+
       {/* Expanded detail */}
       {expanded && (
         <View style={styles.expandedArea}>
@@ -225,7 +240,7 @@ function TerminalLogEntry({
           )}
 
           {/* Messages */}
-          <View style={styles.logBlock}>
+          {snapshot.messages.length > 0 && <View style={styles.logBlock}>
             <ThemedText type="code" style={{ color: C.green, marginBottom: 4 }}>
               ## request ({snapshot.messages.length} messages)
             </ThemedText>
@@ -239,7 +254,24 @@ function TerminalLogEntry({
                 </ThemedText>
               </View>
             ))}
-          </View>
+          </View>}
+
+          {snapshot.steps && (
+            <View style={{ gap: 12 }}>
+              <ThemedText type="code" style={{ color: C.cyan }}>
+                ## 生图调用链路 · 密钥与图片数据已省略
+              </ThemedText>
+              {snapshot.steps.length === 0 ? (
+                <ThemedText type="code" style={{ color: C.whiteDim }}>尚未发出 HTTP 请求</ThemedText>
+              ) : snapshot.steps.map((step) => (
+                <View key={step.id} style={[styles.logBlock, { borderLeftColor: step.status === 'error' ? C.red : C.cyan }]}>
+                  <ThemedText type="code" style={{ color: C.whiteDim }} selectable>
+                    {formatImageDebugStep(step)}
+                  </ThemedText>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Provider thinking/reasoning, kept separate from the generated prose. */}
           {hasReasoning && (
@@ -275,7 +307,7 @@ function TerminalLogEntry({
 export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<DebugRequestCategory | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -298,16 +330,16 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
     [allSnapshots, filter],
   );
 
-  // Auto-scroll to bottom when new entries arrive
+  // Newest requests are first, including pending image tasks.
   useEffect(() => {
     if (!autoScroll || filteredSnapshots.length === 0) return;
     const timer = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     }, 100);
     return () => clearTimeout(timer);
   }, [filteredSnapshots.length, autoScroll]);
 
-  const handleToggle = useCallback((index: number) => {
+  const handleToggle = useCallback((index: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(index)) {
@@ -344,6 +376,7 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
     writing: writingCount,
     collaboration: collaborationCount,
     support: supportCount,
+    image: allSnapshots.filter((s) => getDebugRequestCategory(s.purpose) === 'image').length,
   };
 
   return (
@@ -465,8 +498,8 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
             <ThemedText style={styles.emptyTitle}>等待第一条模型信号</ThemedText>
             <ThemedText style={styles.emptyDescription}>
               {debugEnabled
-                ? '执行一次正文生成、AI 补全或人物整理，这里就会出现完整的请求、思考、输出和 Token 记录。'
-                : '模型请求记录当前关闭。启动记录后，新的请求、思考、输出和 Token 数据会直接出现在这里。'}
+                ? '执行正文生成、AI 补全或生图。生图会从请求开始实时记录调用链路，展开可查看请求 JSON、状态与结果。'
+                : '模型请求记录当前关闭。启动记录后，新的文本与生图请求会出现在这里。'}
             </ThemedText>
             {!debugEnabled ? (
               <Pressable
@@ -497,10 +530,10 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
         ) : (
           filteredSnapshots.map((snapshot, index) => (
             <TerminalLogEntry
-              key={`${snapshot.at}-${index}`}
+              key={snapshot.id ?? `${snapshot.at}-${index}`}
               snapshot={snapshot}
-              expanded={expandedIds.has(index)}
-              onToggle={() => handleToggle(index)}
+              expanded={expandedIds.has(snapshot.id ?? `${snapshot.at}-${index}`)}
+              onToggle={() => handleToggle(snapshot.id ?? `${snapshot.at}-${index}`)}
             />
           ))
         )}

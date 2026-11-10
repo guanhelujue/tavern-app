@@ -1,3 +1,4 @@
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -109,6 +110,8 @@ export function ForecastStep({
       <ThemedText themeColor="textMuted">
         基于当前正史与你的要求，推演 3 条互相独立、非正史的候选路线。选中的路线只生成写作计划，不会改动正文。
       </ThemedText>
+
+      <TaskModelSelector task="outline" disabled={running || outlining} />
 
       {guideChanged ? (
         <View style={[styles.staleBanner, { backgroundColor: theme.surface, borderColor: theme.accent }]}>

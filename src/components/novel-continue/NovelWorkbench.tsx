@@ -1,4 +1,6 @@
-import { router } from 'expo-router';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
+import { router, useNavigation } from 'expo-router';
+import type { NavigationProp } from 'expo-router/react-navigation';
 import { useMemo, useState } from 'react';
 import {
   Modal,
@@ -6,13 +8,16 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
 import { NovelChapterEditorModal } from '@/components/novel-continue/NovelChapterEditorModal';
+import { NovelAvailabilityState } from '@/components/novel-continue/NovelAvailabilityState';
 import { NovelSceneInspirationModal } from '@/components/NovelSceneInspirationModal';
 import { KnowledgePanel } from '@/components/novel-continue/KnowledgePanel';
 import { ConsistencyPanel } from '@/components/novel-continue/ConsistencyPanel';
+import { NovelContextPanel } from '@/components/novel-continue/NovelContextPanel';
 import { WorkbenchPanel } from '@/components/novel-continue/WorkbenchPanel';
 import { AnalysisStep } from '@/components/novel-rewrite/AnalysisStep';
 import { ForecastStep } from '@/components/novel-rewrite/ForecastStep';
@@ -26,9 +31,11 @@ import { DraftTextInput } from '@/components/ui/DraftTextInput';
 import { Spacing } from '@/constants/theme';
 import { NOVEL_TARGET_WORDS_RANGE } from '@/constants/novel-continuation';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { getFinalChapters } from '@/services/novel-continuation-pipeline';
+import { getNovelAuditSourceFingerprint, isNovelRewriteAuditCurrent } from '@/services/novel-audit-freshness';
 import { useTavernStore } from '@/store/tavern-store';
-import type { Message, NovelChapter, NovelContinuationSettings } from '@/types/tavern';
+import type { Message, Novel, NovelChapter, NovelContinuationSettings } from '@/types/tavern';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
 import { exportAssistantTranscript } from '@/utils/chat-session-io';
 import {
@@ -36,14 +43,14 @@ import {
   clampNovelOutlineChapterCount,
 } from '@/utils/novel-outline-options';
 
-export type WorkbenchTab = 'chapters' | 'analysis' | 'forecast' | 'outline' | 'knowledge' | 'consistency' | 'settings';
+export type WorkbenchTab = 'chapters' | 'tools' | 'analysis' | 'forecast' | 'outline' | 'knowledge' | 'consistency' | 'settings' | 'context';
 
 const TABS: { key: WorkbenchTab; label: string }[] = [
   { key: 'chapters', label: '章节' },
   { key: 'analysis', label: '分析' },
   { key: 'forecast', label: '路线' },
   { key: 'outline', label: '大纲' },
-  { key: 'knowledge', label: '知识库' },
+  { key: 'knowledge', label: '剧情资料' },
   { key: 'consistency', label: '一致性' },
   { key: 'settings', label: '设置' },
 ];
@@ -58,23 +65,27 @@ export function NovelWorkbench({
   autoAnalyze?: boolean;
 }) {
   const theme = useTheme();
+  const navigation = useNavigation<NavigationProp<{ workbench: { focus?: WorkbenchTab } }>>();
+  const desktop = useDesktopLayout();
+  const { width } = useWindowDimensions();
+  const splitPanels = desktop && width >= 1280;
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
-  const [tab, setTab] = useState<WorkbenchTab>(initialTab);
+  // The route is shared by the mobile tabs and the desktop project navigation.
+  const tab = initialTab;
+  const tabTitle = tab === 'tools' ? '任务与导出' : tab === 'context' ? '上下文管理' : tab === 'analysis' ? '正文分析' : tab === 'chapters' ? '章节创作' : TABS.find((item) => item.key === tab)?.label;
+  function setTab(next: WorkbenchTab) {
+    navigation.setParams({ focus: next });
+  }
   const [guide, setGuide] = useState<UserGuide>(EMPTY_GUIDE);
   const [showGuide, setShowGuide] = useState(false);
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
   const [showInstructionInput, setShowInstructionInput] = useState(false);
   const [showSceneInspiration, setShowSceneInspiration] = useState(false);
   const [instruction, setInstruction] = useState('');
-  const [batchCount, setBatchCount] = useState('1');
-  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
 
   // 长任务运行状态以 store 中的任务记录为准：切页 / 切出本小说后组件重挂载也能恢复真实状态。
   const jobs = novel?.novelGenerationJobs ?? [];
   const isGenerating = jobs.some((job) => job.kind === 'write' && job.status === 'running');
-  const batchJob = jobs.find((job) => job.kind === 'batch' && (job.status === 'running' || job.status === 'paused'));
-  const isBatchGenerating = batchJob?.status === 'running';
-  const isBatchPaused = batchJob?.status === 'paused';
   const isOutlineGenerating = jobs.some((job) => job.kind === 'outline' && job.status === 'running');
 
   const chapters = useMemo(
@@ -104,7 +115,6 @@ export function NovelWorkbench({
   const resumeNovelGenerationJob = useTavernStore((state) => state.resumeNovelGenerationJob);
   const abandonNovelGenerationJob = useTavernStore((state) => state.abandonNovelGenerationJob);
   const retryNovelGenerationJob = useTavernStore((state) => state.retryNovelGenerationJob);
-  const batchGenerateNovelChapters = useTavernStore((state) => state.batchGenerateNovelChapters);
   const recoverableWriteJob = jobs.find((job) => job.kind === 'write' && job.status === 'paused');
 
   // 空草稿 = 生成失败 / 中断残留（无正文），可安全清理。
@@ -140,11 +150,7 @@ export function NovelWorkbench({
   }
 
   if (!novel) {
-    return (
-      <View style={[styles.center, { backgroundColor: theme.background }]}>
-        <ThemedText themeColor="textMuted">小说不存在。</ThemedText>
-      </View>
-    );
+    return <NovelAvailabilityState />;
   }
 
   async function handleGenerate(userInstruction?: string) {
@@ -152,6 +158,14 @@ export function NovelWorkbench({
       return;
     }
     setShowInstructionInput(false);
+    const existingDraft = chapters.find((chapter) => chapter.status === 'draft' && chapter.content.trim());
+    if (existingDraft) {
+      setEditingChapterId(existingDraft.id);
+      void hydrateNovelChapterContent(existingDraft.id).catch((error) => {
+        showAppAlert('正文加载失败', error instanceof Error ? error.message : '请稍后重试。');
+      });
+      return;
+    }
     try {
       // 智能续写：复用状态分析 + 已选路线的上下文（未选路线则直接用分析结果）。
       const activePlan = (novel?.novelContinuationPlans ?? []).find(
@@ -166,28 +180,16 @@ export function NovelWorkbench({
         setTab('chapters');
       }
     } catch (error) {
-      showAppAlert('续写失败', error instanceof Error ? error.message : '生成失败，请稍后重试。');
+      showAppAlert('写作失败', error instanceof Error ? error.message : '生成失败，请稍后重试。');
     }
   }
 
-  async function handleBatch() {
-    const count = Math.max(1, Math.min(20, Number.parseInt(batchCount, 10) || 1));
-    setBatchProgress({ done: 0, total: count });
+  async function recoverWritingJob(jobId: string, retry = false) {
     try {
-      const result = await batchGenerateNovelChapters(novelId, count, {
-        onProgress: (done, total) => setBatchProgress({ done, total }),
-      });
-      if (result.stopped) {
-        showAppAlert('批量续写已暂停', result.reason ?? '审核发现高风险，已停止后续章节。');
-      } else {
-        showAppAlert('批量续写完成', (novel?.continuationSettings?.autoAudit ?? true)
-          ? '已生成章节并完成自动审查，可在章节列表查看。'
-          : '已生成章节；自动审查已关闭，请在章节列表手动审查。');
-      }
+      const id = await (retry ? retryNovelGenerationJob : resumeNovelGenerationJob)(novelId, jobId);
+      if (id) setEditingChapterId(id);
     } catch (error) {
-      showAppAlert('批量续写失败', error instanceof Error ? error.message : '批量生成失败。');
-    } finally {
-      setBatchProgress(null);
+      showAppAlert('恢复任务失败', error instanceof Error ? error.message : '草稿已保留，请稍后重试。');
     }
   }
   async function handleGenerateOutline() {
@@ -245,8 +247,8 @@ export function NovelWorkbench({
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, { borderBottomColor: theme.border }]}>
-        <Pressable
+      <View style={[styles.header, desktop && styles.desktopHeader, { borderBottomColor: theme.border }]}>
+        {!desktop && <Pressable
           onPress={() => {
             if (router.canGoBack()) {
               router.back();
@@ -257,10 +259,10 @@ export function NovelWorkbench({
           hitSlop={10}
           style={styles.headerButton}>
           <ThemedText themeColor="textMuted">←</ThemedText>
-        </Pressable>
+        </Pressable>}
         <View style={styles.headerText}>
-          <ThemedText type="smallBold" numberOfLines={1}>
-            {novel.name}
+          <ThemedText type={desktop ? 'subtitle' : 'smallBold'} numberOfLines={1}>
+            {desktop ? tabTitle : novel.name}
           </ThemedText>
           <ThemedText type="small" themeColor="textMuted">
             定稿 {finalCount} / 共 {chapters.length} 章 · {totalChars} 字
@@ -268,7 +270,7 @@ export function NovelWorkbench({
         </View>
       </View>
 
-      <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
+      {!desktop && <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -295,21 +297,22 @@ export function NovelWorkbench({
             );
           })}
         </ScrollView>
-      </View>
+      </View>}
 
       <ScrollView
         style={styles.body}
-        contentContainerStyle={styles.bodyContent}
+        contentContainerStyle={[styles.bodyContent, desktop && styles.desktopBodyContent]}
         keyboardShouldPersistTaps="handled">
-        {tab === 'chapters' ? (
-          <View style={styles.stack}>
+        {tab === 'chapters' || tab === 'tools' ? (
+          <View style={[styles.stack, splitPanels && styles.desktopPanels]}>
+            <View style={[styles.stack, splitPanels && styles.desktopSupport]}>
             {recoverableWriteJob ? (
               <WorkbenchPanel
-                title="发现可恢复的续写任务"
-                subtitle={`第 ${recoverableWriteJob.chapterIndex ?? '?'} 章 · 已完成 ${recoverableWriteJob.segmentIndex ?? 0}/${recoverableWriteJob.totalSegments ?? 1} 段`}>
-                <View style={[styles.batchRow, { flexWrap: 'wrap' }]}>
+                title="章节生成待恢复"
+                subtitle={recoverableWriteJob.lastError || `第 ${recoverableWriteJob.chapterIndex ?? '?'} 章 · 已生成的正文保留在草稿中`}>
+                <View style={[styles.headerActions, { flexWrap: 'wrap' }]}>
                   <Pressable
-                    onPress={() => void resumeNovelGenerationJob(novelId, recoverableWriteJob.jobId)}
+                    onPress={() => void recoverWritingJob(recoverableWriteJob.jobId)}
                     style={[styles.primaryButton, { backgroundColor: theme.primary }]}>
                     <ThemedText type="small" style={{ color: theme.onPrimary }}>继续任务</ThemedText>
                   </Pressable>
@@ -319,9 +322,9 @@ export function NovelWorkbench({
                     <ThemedText type="small">放弃任务</ThemedText>
                   </Pressable>
                   <Pressable
-                    onPress={() => void retryNovelGenerationJob(novelId, recoverableWriteJob.jobId)}
+                    onPress={() => void recoverWritingJob(recoverableWriteJob.jobId, true)}
                     style={[styles.ghostButton, { borderColor: theme.border }]}>
-                    <ThemedText type="small">从上一章重试</ThemedText>
+                    <ThemedText type="small">重试空白章节</ThemedText>
                   </Pressable>
                 </View>
               </WorkbenchPanel>
@@ -333,18 +336,18 @@ export function NovelWorkbench({
                 每次任务同时记录 Context Pack 占用、重试次数、模型、耗时和分段 checkpoint。
               </ThemedText>
             </WorkbenchPanel>
-            {novel.novelStoryAnalysis ? (
+            {!desktop && (novel.novelStoryAnalysis ? (
               <WorkbenchPanel
-                title="智能续写"
-                subtitle={`已分析 ${novel.novelStoryAnalysis.lastAnalyzedChapter} 章，续写将基于状态分析（角色状态/正史/伏笔）生成；已选路线则按路线推进。`}>
+                title="章节创作"
+                subtitle={`已分析 ${novel.novelStoryAnalysis.lastAnalyzedChapter} 章，写作将结合角色状态、正史和伏笔；已选路线则按路线推进。`}>
                 <ThemedText type="small" themeColor="textMuted">
                   草稿生成后先进入章节弹窗，可「8 维审查」「AI 修订」，满意后再「采纳定稿」。
                 </ThemedText>
               </WorkbenchPanel>
             ) : (
               <WorkbenchPanel
-                title="智能续写"
-                subtitle="建议先做一次状态分析，续写会基于角色状态 / 正史 / 伏笔生成，质量更高，也支持多路线推演。">
+                title="章节创作"
+                subtitle="可直接写第一章；已有正文时，可以分析角色状态、正史和伏笔，辅助后续写作。">
                 <Pressable
                   onPress={() => setTab('analysis')}
                   style={[styles.ghostButton, { borderColor: theme.border, alignSelf: 'flex-start' }]}>
@@ -353,23 +356,30 @@ export function NovelWorkbench({
                   </ThemedText>
                 </Pressable>
               </WorkbenchPanel>
-            )}
-            <WorkbenchPanel
+            ))}
+            {desktop && <WorkbenchPanel title="正文分析" subtitle="提取已有正文中的人物状态、正史和伏笔，并同步知识库。">
+              <Pressable accessibilityRole="button" onPress={() => setTab('analysis')} style={[styles.ghostButton, { borderColor: theme.border, alignSelf: 'flex-start' }]}>
+                <ThemedText type="small">分析已有正文</ThemedText>
+              </Pressable>
+            </WorkbenchPanel>}
+            {!desktop && <WorkbenchPanel
               title="灵感对话"
-              subtitle="自动带入世界观，每次只发送当前提示词；历史问答不占用下一次请求的 token。">
+              subtitle="自动带入世界观与当前章节上下文，连续对话结果可直接并入本章写作引导。">
               <Pressable
                 onPress={() => setShowSceneInspiration(true)}
-                disabled={isGenerating || isBatchGenerating}
+                disabled={isGenerating}
                 style={[
                   styles.ghostButton,
                   { borderColor: theme.accent, alignSelf: 'flex-start' },
-                  (isGenerating || isBatchGenerating) && { opacity: 0.5 },
+                  isGenerating && { opacity: 0.5 },
                 ]}>
                 <ThemedText type="smallBold" themeColor="accent">
                   ✨ 打开灵感对话
                 </ThemedText>
               </Pressable>
-            </WorkbenchPanel>
+            </WorkbenchPanel>}
+            </View>
+            <View style={[styles.stack, splitPanels && styles.desktopChapters]}>
             <ChaptersPanel
               chapters={chapters}
               finalCount={finalCount}
@@ -388,15 +398,10 @@ export function NovelWorkbench({
                 setShowInstructionInput(true);
               }}
               onGenerateWithInstruction={(text) => void handleGenerate(text)}
-              isBatchGenerating={isBatchGenerating}
-              isBatchPaused={isBatchPaused}
-              batchProgress={batchProgress}
-              batchCount={batchCount}
-              autoAudit={novel.continuationSettings?.autoAudit ?? true}
-              onBatchCountChange={setBatchCount}
-              onBatch={() => void handleBatch()}
+              novel={novel}
               onExport={() => void handleExportBook()}
             />
+            </View>
           </View>
         ) : null}
         {tab === 'analysis' ? (
@@ -451,6 +456,7 @@ export function NovelWorkbench({
           />
         ) : null}
         {tab === 'knowledge' ? <KnowledgePanel novelId={novelId} /> : null}
+        {tab === 'context' ? <NovelContextPanel key={novelId} novelId={novelId} /> : null}
         {tab === 'consistency' ? <ConsistencyPanel novelId={novelId} /> : null}
         {tab === 'settings' ? (
           <SettingsPanel
@@ -496,152 +502,84 @@ export function NovelWorkbench({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ChaptersPanel({
+  novel,
   chapters,
   finalCount,
   isGenerating,
-  isBatchGenerating = false,
-  isBatchPaused = false,
-  batchProgress = null,
   draftCount,
   emptyDraftCount,
   onOpenChapter,
   onGenerate,
   onGenerateWithInstruction,
-  onBatch = () => undefined,
   onExport,
   onCleanEmptyDrafts,
-  batchCount = '',
-  autoAudit = false,
-  onBatchCountChange = () => undefined,
 }: {
+  novel: Novel;
   chapters: NovelChapter[];
   finalCount: number;
   isGenerating: boolean;
-  isBatchGenerating?: boolean;
-  isBatchPaused?: boolean;
-  batchProgress?: { done: number; total: number } | null;
   draftCount: number;
   emptyDraftCount: number;
   onOpenChapter: (chapterId: string) => void;
   onGenerate: () => void;
   onGenerateWithInstruction: (text: string) => void;
-  onBatch?: () => void;
   onExport: () => void;
   onCleanEmptyDrafts: () => void;
-  batchCount?: string;
-  autoAudit?: boolean;
-  onBatchCountChange?: (value: string) => void;
 }) {
   const theme = useTheme();
-
-  if (chapters.length === 0) {
-    return (
-      <WorkbenchPanel title="还没有章节" subtitle="从第一笔开始，或导入已有正文后在此续写。">
-        <View style={styles.emptyCard}>
-          <ThemedText type="small" themeColor="textMuted">
-            章节化续写：每次生成的正文先落入「草稿」，审查通过后再「采纳定稿」。
-          </ThemedText>
-          <Pressable
-            onPress={onGenerateWithInstruction.bind(null, '')}
-            disabled={isGenerating}
-            style={[styles.primaryButton, { backgroundColor: theme.accent }, isGenerating && { opacity: 0.5 }]}>
-            <ThemedText type="smallBold" style={{ color: theme.onPrimary }}>
-              {isGenerating ? '生成中…' : '✍️ 续写第 1 章'}
-            </ThemedText>
-          </Pressable>
-          <Pressable onPress={onGenerate} disabled={isGenerating} style={[styles.ghostButton, { borderColor: theme.border }]}>
-            <ThemedText type="small" themeColor="textMuted">
-              带指令续写
-            </ThemedText>
-          </Pressable>
-        </View>
-      </WorkbenchPanel>
-    );
-  }
-
   return (
     <>
       <WorkbenchPanel
         title="章节列表"
-        subtitle={`${finalCount} 定稿 · ${draftCount} 草稿`}
+        subtitle={chapters.length === 0 ? '在工作台写第一章，或导入已有正文。' : `${finalCount} 定稿 · ${draftCount} 草稿`}
         action={
           <View style={styles.headerActions}>
             {emptyDraftCount > 0 ? (
               <Pressable
                 onPress={onCleanEmptyDrafts}
-                disabled={isGenerating || isBatchGenerating}
-                style={[styles.ghostButton, { borderColor: theme.border }, (isGenerating || isBatchGenerating) && { opacity: 0.5 }]}>
+                disabled={isGenerating}
+                style={[styles.ghostButton, { borderColor: theme.border }, isGenerating && { opacity: 0.5 }]}>
                 <ThemedText type="small" themeColor="textMuted">
                   清理空草稿（{emptyDraftCount}）
                 </ThemedText>
               </Pressable>
             ) : null}
-            <Pressable onPress={onGenerate} disabled={isGenerating || isBatchGenerating} style={[styles.primaryButton, { backgroundColor: theme.accent }, (isGenerating || isBatchGenerating) && { opacity: 0.5 }]}>
+            <Pressable onPress={onGenerate} disabled={isGenerating} style={[styles.primaryButton, { backgroundColor: theme.accent }, isGenerating && { opacity: 0.5 }]}>
               <ThemedText type="smallBold" style={{ color: theme.onPrimary }}>
-                {isGenerating ? '生成中…' : '✍️ 续写下一章'}
+                {isGenerating ? '生成中…' : '写下一章'}
               </ThemedText>
             </Pressable>
           </View>
         }>
-        <View style={styles.chapterList}>
-          {chapters.map((chapter) => (
-            <ChapterRow
-              key={chapter.id}
-              chapter={chapter}
-              onPress={() => onOpenChapter(chapter.id)}
-            />
-          ))}
-        </View>
+        <TaskModelSelector task="writing" disabled={isGenerating} />
+        {chapters.length === 0 ? <View style={styles.emptyCard}>
+          <ThemedText type="small" themeColor="textMuted">每次生成的正文先保存为草稿，审查通过后再定稿。</ThemedText>
+          <Pressable onPress={onGenerateWithInstruction.bind(null, '')} disabled={isGenerating} style={[styles.primaryButton, { backgroundColor: theme.accent }, isGenerating && { opacity: 0.5 }]}>
+            <ThemedText type="smallBold" style={{ color: theme.onPrimary }}>{isGenerating ? '生成中…' : '写第 1 章'}</ThemedText>
+          </Pressable>
+          <Pressable onPress={onGenerate} disabled={isGenerating} style={[styles.ghostButton, { borderColor: theme.border }]}><ThemedText type="small" themeColor="textMuted">填写写作要求</ThemedText></Pressable>
+        </View> : <View style={styles.chapterList}>
+          {chapters.map((chapter) => <ChapterRow key={chapter.id} novel={novel} chapter={chapter} onPress={() => onOpenChapter(chapter.id)} />)}
+        </View>}
       </WorkbenchPanel>
 
-      <WorkbenchPanel
-        title="批量续写"
-        subtitle={autoAudit
-          ? '连续生产 N 章，每章自动审查，遇到高风险章自动停下等你处理。'
-          : '连续生产 N 章；自动审查已关闭，请在章节列表手动审查。'}>
-        <View style={styles.batchRow}>
-          <TextInput
-            value={batchCount}
-            onChangeText={onBatchCountChange}
-            keyboardType="number-pad"
-            style={[styles.batchInput, { backgroundColor: theme.backgroundElement, borderColor: theme.border, color: theme.text }]}
-          />
-          <Pressable
-            onPress={onBatch}
-            disabled={isBatchGenerating || isGenerating}
-            style={[styles.ghostButton, { borderColor: theme.border }, (isBatchGenerating || isGenerating) && { opacity: 0.5 }]}>
-            <ThemedText type="small" themeColor="textMuted">
-              {isBatchPaused
-                ? '处理后重新开始'
-                : isBatchGenerating
-                ? batchProgress
-                  ? `生成中 ${batchProgress.done}/${batchProgress.total}`
-                  : '生成中…'
-                : '开始批量续写'}
-            </ThemedText>
-          </Pressable>
-          <Pressable
-            onPress={onExport}
-            disabled={isBatchGenerating || isGenerating}
-            style={[styles.ghostButton, { borderColor: theme.border }, (isBatchGenerating || isGenerating) && { opacity: 0.5 }]}>
-            <ThemedText type="small" themeColor="textMuted">
-              📤 导出定稿正文
-            </ThemedText>
-          </Pressable>
-        </View>
+      <WorkbenchPanel title="导出" subtitle="将已定稿的章节导出为正文文件。">
+        <Pressable onPress={onExport} disabled={isGenerating} style={[styles.ghostButton, { borderColor: theme.border }, isGenerating && { opacity: 0.5 }]}>
+          <ThemedText type="small" themeColor="textMuted">📤 导出定稿正文</ThemedText>
+        </Pressable>
       </WorkbenchPanel>
     </>
   );
 }
 
-function ChapterRow({ chapter, onPress }: { chapter: NovelChapter; onPress: () => void }) {
+function ChapterRow({ novel, chapter, onPress }: { novel: Novel; chapter: NovelChapter; onPress: () => void }) {
   const theme = useTheme();
-  const auditSummary = useTavernStore((state) => {
-    const audits = state.novels
-      .find((item) => item.chapters?.some((c) => c.id === chapter.id))
-      ?.audits?.filter((item) => item.chapterId === chapter.id);
-    return audits?.[0];
-  });
+  const auditSummary = (novel.novelRewriteAudits ?? [])
+    .filter((item) => item.chapterId === chapter.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const auditCurrent = auditSummary
+    ? isNovelRewriteAuditCurrent(auditSummary, chapter.id, getNovelAuditSourceFingerprint(novel, chapter))
+    : false;
   const chars = chapter.content.replace(/\s/g, '').length;
   const isDraft = chapter.status === 'draft';
 
@@ -669,11 +607,10 @@ function ChapterRow({ chapter, onPress }: { chapter: NovelChapter; onPress: () =
       <ThemedText type="small" themeColor="textMuted">
         {chars} 字{chapter.goal ? ` · 目标：${chapter.goal.slice(0, 30)}` : ''}
       </ThemedText>
-      {auditSummary ? (
-        <ThemedText type="small" themeColor={auditSummary.passed ? undefined : 'textMuted'}>
-          {auditSummary.passed ? '✅ 审查通过' : `⚠️ 待处理 ${auditSummary.issues.length} 项`}
-        </ThemedText>
-      ) : null}
+      {auditSummary && !auditCurrent ? <ThemedText type="small" themeColor="textMuted">需重新审查</ThemedText> : null}
+      {auditSummary && auditCurrent ? <ThemedText type="small" themeColor={auditSummary.passed ? undefined : 'textMuted'}>
+        {auditSummary.passed ? '✅ 审查通过' : `⚠️ 待处理 ${auditSummary.issues.length} 项`}
+      </ThemedText> : null}
     </Pressable>
   );
 }
@@ -725,6 +662,7 @@ function OutlinePanel({
           </ThemedText>
         </Pressable>
       }>
+      <TaskModelSelector task="outline" disabled={isGenerating} />
       <View style={styles.section}>
         <ThemedText type="smallBold">预计章节</ThemedText>
         <DraftTextInput
@@ -808,6 +746,7 @@ function SettingsPanel({
   const stats = novel?.continuationStats ?? {};
 
   const taskLabels: Record<string, string> = {
+    'story-import': '故事资料识别',
     'rewrite-write': '智能续写',
     'rewrite-audit': '8 维审查',
     'rewrite-revise': 'AI 修订',
@@ -854,7 +793,19 @@ function SettingsPanel({
         </View>
       </WorkbenchPanel>
 
-      <WorkbenchPanel title="续写设置" subtitle="上下文回溯与篇幅。">
+      <WorkbenchPanel title="写作要求" subtitle="从资料中识别的写作要求保存在这里，也可直接修改；修改后自动保存。">
+        <DraftTextInput
+          accessibilityLabel="本作品的写作要求"
+          value={novel?.writingStyle ?? ''}
+          onChangeText={(writingStyle) => useTavernStore.getState().updateNovel(novelId, { writingStyle })}
+          multiline textAlignVertical="top"
+          placeholder="叙事视角、语言风格、人物认知边界、章节输出要求……"
+          placeholderTextColor={theme.textMuted}
+          style={[styles.settingInput, { minHeight: 220, backgroundColor: theme.backgroundElement, borderColor: theme.border, color: theme.text }]}
+        />
+      </WorkbenchPanel>
+
+      <WorkbenchPanel title="写作设置" subtitle="上下文回溯与篇幅。">
         <View style={styles.section}>
           <ThemedText type="smallBold">回溯章节数（0 = 全部前文）</ThemedText>
           <ThemedText type="small" themeColor="textMuted">
@@ -924,7 +875,7 @@ function InstructionModal({
       statusBarTranslucent>
       <View style={[styles.modalOverlay, { backgroundColor: theme.scrim }]}>
         <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-          <ThemedText type="smallBold">续写指令（可选）</ThemedText>
+          <ThemedText type="smallBold">本章写作要求（可选）</ThemedText>
           <ThemedText type="small" themeColor="textMuted">
             描述你希望下一章推进什么（例如「让主角发现玉佩的来历」）。
           </ThemedText>
@@ -949,7 +900,7 @@ function InstructionModal({
               onPress={() => onConfirm(value)}
               style={[styles.primaryButton, { backgroundColor: theme.accent, flex: 1 }]}>
               <ThemedText type="smallBold" style={{ color: theme.onPrimary }}>
-                开始续写
+                开始写作
               </ThemedText>
             </Pressable>
           </View>
@@ -963,6 +914,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  desktopHeader: { paddingHorizontal: 32, paddingVertical: 24 },
+  desktopBodyContent: { padding: 32, width: '100%', maxWidth: 1440, alignSelf: 'center' },
+  desktopPanels: { flexDirection: 'row', alignItems: 'flex-start', gap: 24 },
+  desktopSupport: { width: 272, flexShrink: 0 },
+  desktopChapters: { flex: 1, minWidth: 0 },
   center: {
     flex: 1,
     alignItems: 'center',
@@ -1051,20 +1007,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 2,
-  },
-  batchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  batchInput: {
-    width: 72,
-    minHeight: 40,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: Spacing.two,
-    fontSize: 15,
-    textAlign: 'center',
   },
   outlineBody: {
     gap: Spacing.two,

@@ -1,7 +1,5 @@
-import {
-  ANTI_AI_RULES,
-  NOVEL_LOOKBACK_MAX,
-} from '@/constants/novel-continuation';
+import { NOVEL_LOOKBACK_MAX } from '@/constants/novel-continuation';
+import { resolveNovelSystemPrompt } from '@/constants/novel-memory';
 import { REWRITE_NET_IMPROVEMENT_EPSILON, REWRITE_PASS_SCORE } from '@/constants/novel-story-state';
 import type {
   ApiSettings,
@@ -26,6 +24,8 @@ import {
   type StoryAnalysisDelta,
 } from '@/services/novel-story-state';
 import { buildNovelContextPack, type NovelContextPack } from '@/services/novel-context-pack';
+import { buildChapterInstruction } from '@/utils/novel-chapter-planning';
+import { assertChapterLength } from '@/utils/novel-chapter-length';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 上下文组装 —— 不可压缩层 + 可压缩层（带字符预算）
@@ -33,6 +33,8 @@ import { buildNovelContextPack, type NovelContextPack } from '@/services/novel-c
 
 export type RewriteContextInput = {
   novelName: string;
+  novelSystemPrompt?: string;
+  chapterIndex?: number;
   characterContext?: string;
   analysis: NovelStoryAnalysis | null;
   /** Active SQLite projection generation; preferred over stale analysis rows. */
@@ -56,12 +58,12 @@ export type RewriteContextInput = {
   };
   /** 目标字数。 */
   targetWords: number;
-  /** Hard character budget for assembled rewrite context. */
+  /** Character budget for supplemental context; never truncates the novel's main prompt. */
   maxContextChars?: number;
   apiSettings?: Pick<ApiSettings, 'contextWindowTokens' | 'maxTokens'>;
 };
 
-/** 组装续写 / 重写上下文。返回 system + user prompt。 */
+/** 组装章节写作上下文：小说主提示词 + 连贯性参考资料。 */
 export function buildRewriteContext(input: RewriteContextInput): {
   systemPrompt: string;
   userPrompt: string;
@@ -125,7 +127,7 @@ export function buildRewriteContext(input: RewriteContextInput): {
   const contextPack = buildNovelContextPack(
     input.apiSettings ?? { contextWindowTokens: Math.max(4096, Math.ceil((input.maxContextChars ?? 6000) / 2) + 2048), maxTokens: 2048 },
     {
-      currentChapterGoal: input.lastChapter?.goal || input.plan?.routeId || '',
+      currentChapterGoal: input.mission?.goal || '',
       currentScene: input.lastChapter?.content.slice(-1200) ?? '',
       recentChapterSummaries: analysis?.chapterSummaries.map((row) => ({
         chapter: row.chapter, title: row.title, summary: `${row.events}；${row.stateChanges}`,
@@ -153,7 +155,7 @@ export function buildRewriteContext(input: RewriteContextInput): {
         `视角：${analysis.styleProfile.pointOfView}；节奏：${analysis.styleProfile.pacing}；语言：${analysis.styleProfile.languageFeatures}`,
       ] : [],
       retrievalQuery: [
-        input.lastChapter?.goal,
+        input.mission?.goal,
         input.lastChapter?.content.slice(-1200),
         input.plan?.routeId,
         input.userGuide.mustKeep,
@@ -235,7 +237,7 @@ export function buildRewriteContext(input: RewriteContextInput): {
     if (route.endingNote) {
       routeParts.push(`结局收束：${route.endingNote}`);
     }
-    protectedParts.push(`【选中的续写路线】\n${routeParts.join('\n')}`);
+    protectedParts.push(`【选中的剧情路线（待写计划）】\n${routeParts.join('\n')}`);
   }
 
   // ── 不可压缩层：上一章结尾 ──────────────────────────────────────────────
@@ -279,7 +281,7 @@ export function buildRewriteContext(input: RewriteContextInput): {
     const style = analysis.styleProfile;
     if (style.pointOfView || style.sentenceLength) {
       compressibleParts.push(
-        `【文风画像】视角：${style.pointOfView}；句长：${style.sentenceLength}；对话比例：${style.dialogueRatio}；节奏：${style.pacing}；语言：${style.languageFeatures}`,
+        `【前文文风参考（服从小说主提示词）】视角：${style.pointOfView}；句长：${style.sentenceLength}；对话比例：${style.dialogueRatio}；节奏：${style.pacing}；语言：${style.languageFeatures}`,
       );
     }
   }
@@ -297,10 +299,8 @@ export function buildRewriteContext(input: RewriteContextInput): {
 
   // ── 系统提示组装 ─────────────────────────────────────────────────────────
   const systemParts = [
-    `你是《${input.novelName}》的续写作者。请严格遵循「正史与世界规则」「人物状态与信息边界」「未回收伏笔」「选中的路线」「用户要求」写作，保持原作文风，续写约 ${input.targetWords} 字。`,
     ...protectedParts,
     ...compressibleParts,
-    ANTI_AI_RULES,
   ];
 
   const packSections = [
@@ -311,17 +311,20 @@ export function buildRewriteContext(input: RewriteContextInput): {
     ...contextPack.lockedWorldFacts,
     ...contextPack.relevantRelations,
     ...contextPack.unresolvedHooks,
-    ...contextPack.styleConstraints,
   ];
   if (packSections.length) {
-    systemParts.splice(1, 0, `【统一 Context Pack】\n${packSections.map((item) => `- ${item.text}`).join('\n')}`);
+    systemParts.unshift(`【统一 Context Pack】\n${packSections.map((item) => `- ${item.text}`).join('\n')}`);
   }
 
-  const userPrompt = `请根据以上约束，续写下一章正文。
-- 只输出正文本身，不要输出章节标题、注释或解释。
-- 保持叙事视角与语言风格与前文一致。
-- 若为结局路线，本章需朝选定的结局收束推进。
-- 不要使用「（本章完）」类结尾标注。`;
+  const chapterIndex = input.chapterIndex ?? ((input.lastChapter?.index ?? 0) + 1);
+  const userPrompt = [
+    `请为《${input.novelName}》创作第${chapterIndex}章正文，遵循小说主提示词和作者本章要求。`,
+    chapterIndex === 1
+      ? '这是小说开篇，请建立本章场景与人物处境，不要虚构不存在的前章剧情。'
+      : '承接已发生的剧情，保持事实、人物认知和伏笔的连续性，落实本章目标。',
+    '叙事视角、文风和输出格式以小说主提示词及作者本章要求为准。',
+    ...(input.targetWords > 0 ? [`本次目标约 ${input.targetWords} 字；作者有明确篇幅要求时遵循作者要求。`] : []),
+  ].join('\n');
 
   const maxContextChars = Math.max(1000, input.maxContextChars ?? 6000);
   const systemPrompt = systemParts.join('\n\n');
@@ -329,7 +332,12 @@ export function buildRewriteContext(input: RewriteContextInput): {
     ? `${systemPrompt.slice(0, maxContextChars - 18)}\n【上下文已按预算裁剪】`
     : systemPrompt;
   return {
-    systemPrompt: [input.characterContext, boundedPrompt].filter(Boolean).join('\n\n'),
+    systemPrompt: [
+      `【小说主提示词】\n${resolveNovelSystemPrompt(input.novelSystemPrompt)}`,
+      '【写作资料使用原则】\n以下世界、人物和前文资料用于保持事实一致、人物信息边界与伏笔连续性。叙事视角、语言风格和输出格式遵循小说主提示词及作者本章要求，前文文风仅作参考。章纲与路线是待写计划，不是已经发生的事实。',
+      input.characterContext,
+      boundedPrompt,
+    ].filter(Boolean).join('\n\n'),
     userPrompt,
     contextPack,
   };
@@ -400,12 +408,14 @@ export function parseRewriteAudit(raw: string): RewriteAuditOutput {
 
 export type AuditRewriteOptions = {
   novelName: string;
+  novelSystemPrompt?: string;
   chapter: NovelChapter;
   analysis: NovelStoryAnalysis | null;
   plan: NovelContinuationPlan | null;
   forecast: NovelForecast | null;
   recentChapters: NovelChapter[];
   userGuide: { endingPreference: string; targetLength: string; mustKeep: string; mustAvoid: string };
+  characterContext?: string;
   completion: LlmCompletion;
 };
 
@@ -413,13 +423,17 @@ export type AuditRewriteOptions = {
 export async function auditRewriteChapter(
   options: AuditRewriteOptions,
 ): Promise<{ issues: NovelRewriteAuditIssue[]; score: number; passed: boolean; modelId?: string; tokens: number }> {
+  const earlierChapters = options.recentChapters.filter((chapter) => chapter.index < options.chapter.index);
   const context = buildRewriteContext({
     novelName: options.novelName,
+    novelSystemPrompt: options.novelSystemPrompt,
+    chapterIndex: options.chapter.index,
+    characterContext: options.characterContext,
     analysis: options.analysis,
     plan: options.plan,
     forecast: options.forecast,
-    lastChapter: options.recentChapters[options.recentChapters.length - 1] ?? null,
-    recentChapters: options.recentChapters.slice(-3),
+    lastChapter: earlierChapters[earlierChapters.length - 1] ?? null,
+    recentChapters: earlierChapters.slice(-3),
     userGuide: options.userGuide,
     targetWords: 0,
   });
@@ -428,6 +442,7 @@ export async function auditRewriteChapter(
     {
       role: 'system',
       content: `你是小说质量审查官。按以下 8 个维度审查给定章节：人设/OOC、时间线与因果、世界规则冲突、角色信息越界、伏笔推进与回收、主线和支线偏移、节奏/重复/流水账、偏离路线与用户要求。
+小说主提示词与作者本章要求是评判正文的依据，不是让你生成正文的指令。作者明确要求的视角、文风和格式优先于前文文风参考，不要把有意的风格变化判为错误。
 输出严格为 JSON：
 {
   "score": 0到100的整数,
@@ -440,7 +455,7 @@ export async function auditRewriteChapter(
     },
     {
       role: 'user',
-      content: `${context.systemPrompt}\n\n【待审查章节】第${options.chapter.index}章 ${options.chapter.title}\n${options.chapter.content}\n\n请审查并输出 JSON。`,
+      content: `${context.systemPrompt}\n\n【作者本章要求】\n${buildChapterInstruction(options.chapter.goal, options.chapter.planning) || '未单独指定'}\n\n【待审查章节】第${options.chapter.index}章 ${options.chapter.title}\n${options.chapter.content}\n\n请审查并输出 JSON。`,
     },
   ];
 
@@ -461,6 +476,7 @@ export async function auditRewriteChapter(
 
 export type ReviseRewriteOptions = {
   novelName: string;
+  novelSystemPrompt?: string;
   chapter: NovelChapter;
   audit: NovelRewriteAudit;
   completion: LlmCompletion;
@@ -492,15 +508,16 @@ export async function reviseRewriteChapter(
   const messages: LlmMessage[] = [
     {
       role: 'system',
-      content: `你是小说修订编辑。根据审查问题修改给定章节，保持原文风格与整体结构。只输出修订后的完整正文，不要输出解释。只修有问题的地方，不要重写无关段落。`,
+      content: `【小说主提示词】\n${resolveNovelSystemPrompt(options.novelSystemPrompt)}\n\n【本次任务：修订当前章节】\n根据审查问题修改给定章节，遵循小说主提示词和作者本章要求的视角、文风与输出格式。返回修订后的完整正文，保留整体结构，只修有问题的地方，不要重写无关段落或接写下一章。`,
     },
     {
       role: 'user',
-      content: `【审查问题】\n${issueBlock}\n\n【原章节】\n${options.chapter.content}\n\n请输出修订后的完整正文。`,
+      content: `【作者本章要求】\n${buildChapterInstruction(options.chapter.goal, options.chapter.planning) || '未单独指定'}\n\n【审查问题】\n${issueBlock}\n\n【原章节】\n${options.chapter.content}\n\n请输出修订后的完整正文。`,
     },
   ];
 
   const result = await options.completion(messages, 'rewrite-revise');
+  assertChapterLength(result.content, options.chapter.targetWords);
   return {
     content: result.content,
     modelId: result.modelId,

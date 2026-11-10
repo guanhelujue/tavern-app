@@ -9,13 +9,20 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NovelFormField } from '@/components/novel-create/NovelFormField';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { useTavernStore } from '@/store/tavern-store';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
+import { router } from 'expo-router';
+import { resolveApiSettings, useTavernStore } from '@/store/tavern-store';
+import { requestChapterRewrite, type ChapterRewriteMode } from '@/services/novel-chapter-rewrite';
+import { getNovelAuditSourceFingerprint, isNovelRewriteAuditCurrent } from '@/services/novel-audit-freshness';
 import type { NovelAuditIssue, NovelChapter } from '@/types/tavern';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
+import { NovelComicModal } from '@/components/NovelComicModal';
+import { assertChapterLength } from '@/utils/novel-chapter-length';
 
 const AUDIT_CATEGORY_LABELS: Record<NovelAuditIssue['category'], string> = {
   consistency: '一致性',
@@ -40,6 +47,7 @@ export function NovelChapterEditorModal({
   onClose,
 }: NovelChapterEditorModalProps) {
   const theme = useTheme();
+  const desktop = useDesktopLayout();
   const insets = useSafeAreaInsets();
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const updateNovelChapter = useTavernStore((state) => state.updateNovelChapter);
@@ -55,11 +63,15 @@ export function NovelChapterEditorModal({
   const [summary, setSummary] = useState('');
   const [goal, setGoal] = useState('');
   const [content, setContent] = useState('');
-  const [operation, setOperation] = useState<'audit' | 'revise' | 'finalize' | 'delete' | 'rollback' | null>(null);
+  const [operation, setOperation] = useState<'audit' | 'revise' | 'finalize' | 'delete' | 'rollback' | 'candidate' | null>(null);
+  const [rewriteMode, setRewriteMode] = useState<ChapterRewriteMode>('edit');
+  const [rewriteInstruction, setRewriteInstruction] = useState('');
+  const [candidate, setCandidate] = useState<{ content: string; source: string } | null>(null);
   const isAuditing = operation === 'audit';
   const isAiRevising = operation === 'revise';
   const isFinalizing = operation !== null && !isAuditing && !isAiRevising;
   const [isDirty, setIsDirty] = useState(false);
+  const [isComicOpen, setIsComicOpen] = useState(false);
   const operationToken = useRef(0);
   const activeOperation = useRef<number | null>(null);
   const editorKey = useRef<string | null>(null);
@@ -86,7 +98,7 @@ export function NovelChapterEditorModal({
       setGoal(chapter.goal);
       setContent(chapter.content);
       setIsDirty(false);
-      if (newSession) setOperation(null);
+      if (newSession) { setOperation(null); setCandidate(null); setRewriteInstruction(''); }
     }
   }, [visible, novelId, chapter, isDirty, operation]);
 
@@ -119,6 +131,9 @@ export function NovelChapterEditorModal({
   }
 
   const activeChapter: NovelChapter = currentChapter;
+  const sourceFingerprint = novel ? getNovelAuditSourceFingerprint(novel, activeChapter) : '';
+  const auditIsCurrent = (audit: { chapterId: string; sourceFingerprint?: string; stale?: boolean }) =>
+    !isDirty && isNovelRewriteAuditCurrent(audit, activeChapter.id, sourceFingerprint);
 
   function setDirtyFor(next: Partial<Pick<NovelChapter, 'title' | 'summary' | 'goal' | 'content'>>) {
     setIsDirty(
@@ -157,6 +172,7 @@ export function NovelChapterEditorModal({
     editorKey.current = null;
     setOperation(null);
     setIsDirty(false);
+    setIsComicOpen(false);
     onClose();
   }
 
@@ -170,13 +186,13 @@ export function NovelChapterEditorModal({
   async function requestClose() {
     if (closePending.current) return;
     Keyboard.dismiss();
-    if (!isDirty) {
+    if (!isDirty && !candidate) {
       closeEditor();
       return;
     }
     closePending.current = true;
     try {
-      if (await confirmAppAction('放弃未保存修改？', '关闭后当前章节编辑将丢失。', { confirmLabel: '放弃修改', cancelLabel: '继续编辑' })) {
+      if (await confirmAppAction('放弃未保存修改？', candidate ? '尚未采纳的修改候选会丢失，已保存原稿保留。' : '关闭后当前章节编辑将丢失。', { confirmLabel: '放弃修改', cancelLabel: '继续编辑' })) {
         closeEditor();
       }
     } finally {
@@ -184,19 +200,43 @@ export function NovelChapterEditorModal({
     }
   }
 
-  async function handleFinalize() {
+  async function handleFinalize(continueWriting = false) {
     const token = beginOperation('finalize');
     if (token === null) return;
     try {
-      const confirmed = await confirmAppAction('采纳定稿', `将把「${title || `第${activeChapter.index}章`}」从草稿提升为定稿。确定吗？`, { confirmLabel: '定稿' });
-      if (!confirmed || !isCurrentOperation(token)) return;
       if (isDirty) {
         updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
         setIsDirty(false);
       }
+      const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
+      const savedChapter = latest?.chapters?.find((item) => item.id === activeChapter.id);
+      assertChapterLength(savedChapter?.content ?? content, savedChapter?.targetWords);
+      if (latest?.continuationSettings?.autoAudit !== false) {
+        const saved = latest?.chapters?.find((item) => item.id === activeChapter.id);
+        const validAudit = saved && latest?.novelRewriteAudits?.find((audit) =>
+          isNovelRewriteAuditCurrent(audit, saved.id, getNovelAuditSourceFingerprint(latest, saved)));
+        if (!validAudit) await auditRewriteChapter(novelId, activeChapter.id);
+        if (!isCurrentOperation(token)) return;
+        const checked = useTavernStore.getState().novels.find((item) => item.id === novelId);
+        const checkedChapter = checked?.chapters?.find((item) => item.id === activeChapter.id);
+        const audit = checked && checkedChapter && checked.novelRewriteAudits?.find((item) =>
+          isNovelRewriteAuditCurrent(item, activeChapter.id, getNovelAuditSourceFingerprint(checked, checkedChapter)));
+        if (!audit || !audit.passed || audit.issues.some((issue) => issue.severity === 'critical')) {
+          showAppAlert('草稿待处理', audit ? '审查发现高风险问题，请修改或重写后重新审查。原稿已保留。' : '设定或正文已变化，请重新审查当前版本。');
+          return;
+        }
+      }
       backupNovelChapter(novelId, activeChapter.id);
       await finalizeNovelChapter(novelId, activeChapter.id);
-      if (isCurrentOperation(token)) showAppAlert('已定稿', '本章已提升为定稿。');
+      if (isCurrentOperation(token)) {
+        showAppAlert('已定稿', '本章已保存为定稿，后续写作会带入本章。');
+        if (continueWriting) {
+          const nextDraft = useTavernStore.getState().novels.find((item) => item.id === novelId)?.chapters
+            ?.filter((item) => item.status === 'draft').sort((a, b) => a.index - b.index)[0];
+          closeEditor();
+          router.push(`/novel/chapters/${novelId}?chapterId=${nextDraft?.id ?? 'new'}`);
+        }
+      }
     } catch (error) {
       if (isCurrentOperation(token)) showAppAlert('定稿失败', error instanceof Error ? error.message : '章节提交失败，请重试。');
     } finally {
@@ -248,9 +288,7 @@ export function NovelChapterEditorModal({
         setIsDirty(false);
       }
       // 复用 8 维 LLM 审查：无记录时先生成一次。
-      const hasRewriteAudit = (novel?.novelRewriteAudits ?? []).some(
-        (item) => item.chapterId === activeChapter.id,
-      );
+      const hasRewriteAudit = rewriteAudits.some(auditIsCurrent);
       if (isDirty || !hasRewriteAudit) {
         await auditRewriteChapter(novelId, activeChapter.id);
       }
@@ -283,6 +321,45 @@ export function NovelChapterEditorModal({
     }
   }
 
+  async function handleRewriteCandidate() {
+    const token = beginOperation('candidate');
+    if (token === null) return;
+    try {
+      if (isDirty) {
+        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
+        setIsDirty(false);
+      }
+      const state = useTavernStore.getState();
+      const current = state.novels.find((item) => item.id === novelId);
+      await Promise.all((current?.chapters ?? []).filter((item) => item.index <= activeChapter.index && item.contentStatus && item.contentStatus !== 'loaded')
+        .map((item) => state.hydrateNovelChapterContent(item.id)));
+      const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
+      const saved = latest?.chapters?.find((item) => item.id === activeChapter.id);
+      if (!latest || !saved) throw new Error('章节已不存在。');
+      const source = getNovelAuditSourceFingerprint(latest, saved);
+      const result = await requestChapterRewrite({ novel: latest, chapter: saved,
+        apiSettings: resolveApiSettings(state.providers, state.generationSettings, { task: 'writing', purpose: 'chat' }),
+        writingExtensions: state.contentStyleSettings, instruction: rewriteInstruction, mode: rewriteMode });
+      if (isCurrentOperation(token)) setCandidate({ content: result, source });
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert('生成修改候选失败', error instanceof Error ? error.message : '请稍后重试，原稿已保留。');
+    } finally { finishOperation(token); }
+  }
+
+  function adoptCandidate() {
+    if (!candidate || operation) return;
+    const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
+    const saved = latest?.chapters?.find((item) => item.id === activeChapter.id);
+    if (isDirty || !latest || !saved || candidate.source !== getNovelAuditSourceFingerprint(latest, saved)) {
+      showAppAlert('候选已过期', '生成后正文或作品设定发生了变化，请保存当前修改并重新生成候选。');
+      return;
+    }
+    backupNovelChapter(novelId, activeChapter.id);
+    updateNovelChapter(novelId, activeChapter.id, { content: candidate.content, summary: '' });
+    setContent(candidate.content); setSummary(''); setCandidate(null); setIsDirty(false);
+    showAppAlert('已采纳为草稿', '原稿已备份；摘要和审查需要根据新正文重新生成。');
+  }
+
   async function handleRollback(backupId: string) {
     const token = beginOperation('rollback');
     if (token === null) return;
@@ -300,11 +377,11 @@ export function NovelChapterEditorModal({
     <KeyboardSafeModal
       visible={visible}
       onRequestClose={() => void requestClose()}
-      scrollable>
+      scrollable={!desktop}>
       <View style={[styles.overlay, { backgroundColor: theme.scrim }]}> 
         <SafeAreaContainer insets={insets}>
-          <View style={[styles.sheet, { backgroundColor: theme.background, borderColor: theme.border }]}>
-            <View style={[styles.handle, { backgroundColor: theme.border }]} />
+          <View style={[styles.sheet, desktop && styles.desktopSheet, { backgroundColor: theme.background, borderColor: theme.border }]}>
+            {!desktop && <View style={[styles.handle, { backgroundColor: theme.border }]} />}
             <View style={styles.header}>
               <View style={styles.headerText}>
                 <ThemedText type="smallBold">
@@ -370,6 +447,7 @@ export function NovelChapterEditorModal({
                 }}
               />
               <View style={styles.actions}>
+                <TaskModelSelector task="review" disabled={operation !== null} />
                 <ActionButton
                   label={isDirty ? '保存修改' : '已保存'}
                   onPress={handleSave}
@@ -378,15 +456,16 @@ export function NovelChapterEditorModal({
                 />
                 {currentChapter.status === 'draft' ? (
                   <ActionButton
-                    label="采纳定稿"
-                    onPress={handleFinalize}
+                    label={operation === 'finalize' ? '正在定稿…' : novel?.continuationSettings?.autoAudit === false ? '采纳定稿' : '审查并定稿'}
+                    onPress={() => void handleFinalize()}
                     tone="accent"
-                    disabled={isAuditing || isAiRevising || isFinalizing}
+                    disabled={isAuditing || isAiRevising || isFinalizing || !content.trim()}
                   />
                 ) : null}
+                {currentChapter.status === 'draft' && <ActionButton label="定稿并继续写作" onPress={() => void handleFinalize(true)} disabled={operation !== null || !content.trim()} />}
                 {currentChapter.status === 'draft' ? (
                   <ActionButton
-                    label={isAiRevising ? 'AI 修订中…' : 'AI 修订'}
+                    label={isAiRevising ? '自动修复中…' : '自动修复审查问题'}
                     onPress={() => void handleAiRevise()}
                     disabled={isAiRevising || isAuditing || isFinalizing}
                   />
@@ -396,7 +475,28 @@ export function NovelChapterEditorModal({
                   onPress={() => void handleAudit()}
                   disabled={isAuditing || isAiRevising || isFinalizing}
                 />
+                <ActionButton
+                  label="写实分镜"
+                  onPress={() => setIsComicOpen(true)}
+                  disabled={isAuditing || isAiRevising || isFinalizing || !content.trim()}
+                  tone="accent"
+                />
                 <ActionButton label="删除章节" onPress={handleDelete} tone="danger" disabled={isAuditing || isAiRevising || isFinalizing} />
+              </View>
+
+              <View style={styles.section}>
+                <ThemedText type="smallBold">修改本章</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">按当前角色、世界和章节目标生成候选；查看后采纳，原稿自动备份。</ThemedText>
+                <TaskModelSelector task="writing" disabled={operation !== null} />
+                <View style={styles.actions}>{([['polish', '润色文字'], ['edit', '按意见修改'], ['rewrite', '整章重写']] as const).map(([mode, label]) =>
+                  <ActionButton key={mode} label={label} tone={rewriteMode === mode ? 'accent' : 'default'} onPress={() => setRewriteMode(mode)} disabled={operation !== null} />)}</View>
+                <NovelFormField label="修改要求" value={rewriteInstruction} onChangeText={setRewriteInstruction} editable={operation === null} multiline minHeight={76} placeholder="例如：改为高中返校，以生前生后的差异制造笑点，保留章末发现的线索。" />
+                <ActionButton label={operation === 'candidate' ? '正在生成修改候选…' : '生成修改候选'} onPress={() => void handleRewriteCandidate()} disabled={operation !== null || !content.trim() || (rewriteMode !== 'polish' && !rewriteInstruction.trim())} tone="accent" />
+                {candidate && <View style={[styles.auditCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+                  <ThemedText type="smallBold">修改候选 · {candidate.content.replace(/\s/g, '').length} 字</ThemedText>
+                  <ThemedText selectable>{candidate.content}</ThemedText>
+                  <View style={styles.actions}><ActionButton label="采纳为草稿" onPress={adoptCandidate} disabled={operation !== null} tone="primary" /><ActionButton label="舍弃候选" onPress={() => setCandidate(null)} disabled={operation !== null} /></View>
+                </View>}
               </View>
 
               {audits.length > 0 ? (
@@ -410,7 +510,7 @@ export function NovelChapterEditorModal({
                         { backgroundColor: theme.backgroundElement, borderColor: theme.border },
                       ]}>
                       <ThemedText type="small">
-                        {audit.passed
+                        {!auditIsCurrent(audit) ? '历史报告 · 正文或设定已变化，需重新审查' : audit.passed
                           ? '✅ 未发现一致性问题'
                           : `⚠️ ${audit.issues.length} 项问题`}
                       </ThemedText>
@@ -437,7 +537,7 @@ export function NovelChapterEditorModal({
                         { backgroundColor: theme.backgroundElement, borderColor: theme.border },
                       ]}>
                       <ThemedText type="small">
-                        {audit.passed
+                        {!auditIsCurrent(audit) ? '历史报告 · 正文或设定已变化，需重新审查' : audit.passed
                           ? `✅ 审查通过（${audit.score} 分）`
                           : `⚠️ ${audit.issues.length} 项问题（${audit.score} 分）`}
                       </ThemedText>
@@ -479,6 +579,15 @@ export function NovelChapterEditorModal({
           </View>
         </SafeAreaContainer>
       </View>
+      <NovelComicModal
+        visible={isComicOpen}
+        novelId={novelId}
+        sourceId={activeChapter.id}
+        sourceKind="chapter"
+        sourceTitle={title || `第${activeChapter.index}章`}
+        content={content}
+        onClose={() => setIsComicOpen(false)}
+      />
     </KeyboardSafeModal>
   );
 }
@@ -522,6 +631,9 @@ function ActionButton({
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(disabled) }}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -551,6 +663,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
+  desktopSheet: { width: '90%', maxWidth: 1100, alignSelf: 'center', borderRadius: 14, marginBottom: 40 },
   handle: {
     alignSelf: 'center',
     width: 40,

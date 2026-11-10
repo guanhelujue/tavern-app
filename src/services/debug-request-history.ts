@@ -2,6 +2,12 @@ import type { OpenAIChatMessage } from '@/types/tavern';
 
 /** A bounded, in-memory record of one model request and its result. */
 export type DebugRequestSnapshot = {
+  id?: string;
+  status?: 'pending' | 'success' | 'error' | 'cancelled';
+  durationMs?: number;
+  phase?: string;
+  promptId?: string;
+  steps?: DebugRequestStep[];
   /** ISO timestamp */
   at: string;
   /** Model identifier */
@@ -28,6 +34,21 @@ export type DebugRequestSnapshot = {
   finishReason?: string;
   /** Error message if failed */
   error?: string;
+};
+
+export type DebugRequestStep = {
+  id: number;
+  at: string;
+  label: string;
+  status: 'pending' | 'success' | 'error' | 'cancelled';
+  method?: string;
+  url?: string;
+  requestBody?: string;
+  responseBody?: string;
+  httpStatus?: number;
+  durationMs?: number;
+  error?: string;
+  count: number;
 };
 
 export type DebugRequestSnapshotInput = Omit<DebugRequestSnapshot, 'at'> & { at?: string };
@@ -73,6 +94,7 @@ export const DEBUG_PURPOSE_CATALOG = [
 ] as const;
 
 let debugRequestHistory: readonly DebugRequestSnapshot[] = [];
+let nextSnapshotId = 0;
 const listeners = new Set<() => void>();
 
 /** Returns the current immutable snapshot list for useSyncExternalStore. */
@@ -86,7 +108,7 @@ export function normalizeDebugPurpose(purpose?: string): string {
   return purpose?.trim() || 'unknown';
 }
 
-export type DebugRequestCategory = 'writing' | 'collaboration' | 'support';
+export type DebugRequestCategory = 'writing' | 'collaboration' | 'support' | 'image';
 
 const WRITING_PURPOSES = new Set(['novel-chat', 'chapter-write', 'rewrite']);
 const COLLABORATION_PURPOSES = new Set([
@@ -100,6 +122,7 @@ const COLLABORATION_PURPOSES = new Set([
 /** Broad operational lane used by the debug page's three primary filters. */
 export function getDebugRequestCategory(purpose?: string): DebugRequestCategory {
   const normalized = normalizeDebugPurpose(purpose);
+  if (normalized.startsWith('image-')) return 'image';
   if (WRITING_PURPOSES.has(normalized)) return 'writing';
   if (COLLABORATION_PURPOSES.has(normalized)) return 'collaboration';
   return 'support';
@@ -128,8 +151,15 @@ export function clearDebugRequestHistory(): void {
   notifyListeners();
 }
 
-export function recordDebugSnapshot(partial: DebugRequestSnapshotInput): void {
+export function recordDebugSnapshot(partial: DebugRequestSnapshotInput): string {
+  const id = `request-${++nextSnapshotId}`;
   const snapshot: DebugRequestSnapshot = {
+    id,
+    status: partial.status,
+    durationMs: partial.durationMs,
+    phase: partial.phase,
+    promptId: partial.promptId,
+    steps: partial.steps,
     at: partial.at ?? new Date().toISOString(),
     model: partial.model,
     baseUrl: partial.baseUrl,
@@ -146,6 +176,15 @@ export function recordDebugSnapshot(partial: DebugRequestSnapshotInput): void {
   };
 
   debugRequestHistory = [...debugRequestHistory, snapshot].slice(-MAX_DEBUG_HISTORY);
+  notifyListeners();
+  return id;
+}
+
+/** Update in place without reviving records cleared or evicted during a request. */
+export function updateDebugSnapshot(id: string, patch: Partial<DebugRequestSnapshot>): void {
+  if (!debugRequestHistory.some((snapshot) => snapshot.id === id)) return;
+  debugRequestHistory = debugRequestHistory.map((snapshot) =>
+    snapshot.id === id ? { ...snapshot, ...patch, id } : snapshot);
   notifyListeners();
 }
 

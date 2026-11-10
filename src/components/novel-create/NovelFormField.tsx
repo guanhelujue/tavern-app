@@ -71,6 +71,7 @@ export function NovelFormField({
         </View>
       ) : null}
       <InputComponent
+        accessibilityLabel={label}
         value={value}
         placeholder={placeholder}
         placeholderTextColor={mutedColor}
@@ -129,6 +130,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   input: {
+    width: '100%',
+    minWidth: 0,
     borderWidth: 1,
     borderRadius: 12,
     minHeight: 48,

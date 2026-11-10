@@ -44,6 +44,7 @@ import {
   saveCharacterBiographies,
 } from '@/services/character-biography-storage';
 import { resolveApiSettings, useTavernStore } from '@/store/tavern-store';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import type {
   NovelCastCharacter,
   NovelCharacterBiography,
@@ -57,13 +58,6 @@ import { resolveCharacterCardUiTheme } from '@/utils/character-card-ui-theme';
 const SWIPE_DISTANCE = 56;
 const SWIPE_VELOCITY = 420;
 type CharacterSheetPage = 0 | 1 | 2;
-
-function isExplicitlyAdult(age?: string | null) {
-  const value = age?.trim() ?? '';
-  if (/成年/.test(value)) return true;
-  const match = value.match(/\d+/);
-  return Boolean(match && Number.parseInt(match[0], 10) >= 18);
-}
 
 type NovelCastCharacterModalProps = {
   visible: boolean;
@@ -189,8 +183,10 @@ export function NovelCastCharacterModal({
         weight: draft.weight,
         bodyFat: activeDossierV2.public.bodyFat,
         appearance: draft.appearance,
+        privateBody: activeDossierV2.private,
       }),
     [
+      activeDossierV2.private,
       activeDossierV2.public.bodyFat,
       draft.age,
       draft.appearance,
@@ -436,7 +432,7 @@ export function NovelCastCharacterModal({
 
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
-        purpose: 'utility',
+        task: 'character', purpose: 'utility',
       });
 
       if (
@@ -502,15 +498,11 @@ export function NovelCastCharacterModal({
       );
       return;
     }
-    if (target === 'private' && !isExplicitlyAdult(current.age)) {
-      showAppAlert('需要明确成年', '私密照识图只处理年龄字段明确为 18 岁以上的虚构角色。');
-      return;
-    }
 
     setIsAnalyzingPortrait(true);
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
-        purpose: 'utility',
+        task: 'character', purpose: 'utility',
       });
       if (!apiSettings.apiKey.trim()) {
         showAppAlert('未配置 API Key', '请先在系统设置中填写小模型或默认厂商的 API Key。');
@@ -587,7 +579,7 @@ export function NovelCastCharacterModal({
     setBiographyGeneratingId(generatingKey);
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
-        purpose: 'utility',
+        task: 'character', purpose: 'utility',
       });
       if (!apiSettings.apiKey.trim()) {
         showAppAlert('未配置 API Key', '请先在系统设置中填写小模型或默认厂商的 API Key。');
@@ -633,6 +625,18 @@ export function NovelCastCharacterModal({
       const usedTokens = result.promptTokens + result.completionTokens;
       if (novelId && usedTokens > 0) {
         recordNovelContinuationUsage(novelId, 'create-character-biography', usedTokens);
+      }
+      if (result.truncated || result.usedRawResponse) {
+        showAppAlert(
+          result.truncated ? '小传尚未生成完整' : '小传原文已保留',
+          [
+            result.truncated
+              ? '模型因输出长度上限停止，已保留全部收到的内容。可在系统设置中调高「AI 创作长度上限」（需在模型支持范围内），或缩短本次篇幅后重试。'
+              : '',
+            result.usedRawResponse ? '未能自动拆分标题和正文，完整原始返回已放入小传正文，供你自行整理。' : '',
+            '可直接编辑标题和正文，整理后请保存角色。',
+          ].filter(Boolean).join('\n\n'),
+        );
       }
       return true;
     } catch (error) {
@@ -710,6 +714,9 @@ export function NovelCastCharacterModal({
     };
     const next = {
       ...normalizedBase,
+      // Saving this shared editor makes the card author-maintained, including
+      // cards originally extracted from an imported novel.
+      generatedFromReply: false,
       aiSummary: normalizeCharacterAiSummary(
         current.aiSummary,
         normalizedBase,
@@ -797,7 +804,7 @@ export function NovelCastCharacterModal({
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel={analysisTarget === 'private' ? '根据私密照补全私密档案' : '根据日常照补全公开档案'}>
-                <Text style={[styles.aiGhostText, { color: chrome.accent }]}> 
+                <Text style={[styles.aiGhostText, { color: chrome.accent }]}>
                   {isAnalyzingPortrait
                     ? '识图中…'
                     : analysisTarget === 'private'
@@ -876,7 +883,7 @@ export function NovelCastCharacterModal({
               },
             ]}
           />
-          <Text style={[styles.aiSourceHint, { color: chrome.textMuted }]}> 
+          <Text style={[styles.aiSourceHint, { color: chrome.textMuted }]}>
             {analysisTarget === 'private'
               ? '只读取私密照并只补全私密档案；图中可见内容标为“图片可见”，偏好、反应等非可见内容标为“设定推断”。已有非空字段不会覆盖。'
               : '只读取日常照并只补全公开档案；不会再从日常照生成或推断私密内容。已有非空字段不会覆盖。'}
@@ -1016,7 +1023,7 @@ export function NovelCastCharacterModal({
               </View>
 
               {showPageNavigationButtons ? (
-                <View style={[styles.pageRail, { borderColor: chrome.headerBorder }]}> 
+                <View style={[styles.pageRail, compactWorkspace && styles.pageRailCompact, { borderColor: chrome.headerBorder }]}>
                   {[
                     { index: 0 as CharacterSheetPage, label: '公开', caption: 'PUBLIC', enabled: true },
                     { index: 1 as CharacterSheetPage, label: '私密', caption: 'PRIVATE', enabled: true },
@@ -1063,6 +1070,10 @@ export function NovelCastCharacterModal({
                 </View>
               ) : null}
 
+              <View style={styles.commandModel}>
+                <TaskModelSelector task="character" disabled={aiBusy || Boolean(biographyGeneratingId) || biographyStorageBusy} />
+              </View>
+
               <View
                 style={[
                   styles.commandUtilities,
@@ -1078,7 +1089,7 @@ export function NovelCastCharacterModal({
                     ]}>
                     <Text style={[styles.utilityGlyph, { color: chrome.accent }]}>✦</Text>
                     {!compactWorkspace ? (
-                      <Text style={[styles.utilityLabel, { color: chrome.text }]}> 
+                      <Text style={[styles.utilityLabel, { color: chrome.text }]}>
                         {aiPanelOpen ? '收起 AI' : 'AI 补全'}
                       </Text>
                     ) : null}
@@ -1170,7 +1181,7 @@ export function NovelCastCharacterModal({
               <Text style={[styles.confirmText, { color: chrome.accentContrast }]}>
                 {biographyStorageBusy ? '同步小传中…' : '保存角色'}
               </Text>
-              <View style={[styles.confirmGlyph, { backgroundColor: chrome.accentContrast }]}> 
+              <View style={[styles.confirmGlyph, { backgroundColor: chrome.accentContrast }]}>
                 <Text style={[styles.confirmGlyphText, { color: chrome.accent }]}>✓</Text>
               </View>
             </Pressable>
@@ -1189,6 +1200,7 @@ export function NovelCastCharacterModal({
           : draft.portraitUri
       }
       identityReferenceUri={portraitTarget === 'private' ? draft.portraitUri : undefined}
+      privateReferenceUri={portraitTarget === 'public' ? activeDossierV2.private.portraitUri : undefined}
       portraitPrompt={portraitPrompt}
       portraitPromptInput={portraitPromptInput}
       onClose={() => setPortraitPickerOpen(false)}
@@ -1206,7 +1218,7 @@ export function NovelCastCharacterModal({
           <View style={styles.proposalHeader}>
             <View style={styles.proposalHeaderCopy}>
               <Text style={[styles.proposalEyebrow, { color: chrome.accent }]}>VISUAL FORENSICS / REVIEW</Text>
-              <Text style={[styles.proposalTitle, { color: chrome.text }]}> 
+              <Text style={[styles.proposalTitle, { color: chrome.text }]}>
                 {portraitProposal?.target === 'private' ? '确认私密照补全' : '确认日常照补全'}
               </Text>
               <Text style={[styles.proposalIntro, { color: chrome.textMuted }]}>可见事实与推断内容已分开标记，且只包含当前照片类型对应的字段。取消勾选即可拒绝单个字段，原有非空内容不会被覆盖。</Text>
@@ -1496,6 +1508,7 @@ const styles = StyleSheet.create({
   },
   commandCore: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     minHeight: 72,
@@ -1515,7 +1528,7 @@ const styles = StyleSheet.create({
   },
   commandIdentityCompact: {
     minWidth: 0,
-    flex: 1,
+    flexBasis: '100%',
   },
   commandSignal: {
     width: 4,
@@ -1554,6 +1567,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: 3,
     gap: 3,
+  },
+  pageRailCompact: {
+    minWidth: 0,
+    flexBasis: '100%',
+  },
+  commandModel: {
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   pageRailItem: {
     flex: 1,

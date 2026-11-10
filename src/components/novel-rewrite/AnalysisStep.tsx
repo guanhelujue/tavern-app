@@ -1,3 +1,4 @@
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -119,6 +120,8 @@ export function AnalysisStep({
       <ThemedText themeColor="textMuted">
         AI 将按章节顺序分析全书，提取世界规则、人物、伏笔、时间线与文风，用于续写路线推演。支持中断后继续。
       </ThemedText>
+
+      <TaskModelSelector task="analysis" disabled={running} />
 
       <View
         style={[

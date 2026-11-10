@@ -10,8 +10,10 @@ import {
   normalizeCharacterAiSummary,
 } from '@/features/character-dossier-v2/ai-summary';
 import { normalizeCharacterDossierV2 } from '@/features/character-dossier-v2/model';
-import { formatProtagonistAuthority, getProtagonistCast } from '@/utils/novel-player';
+import { formatProtagonistAuthority } from '@/utils/novel-player';
 import { getNarrativeNovel, NOVEL_CAST_IDENTITY_RULE } from '@/utils/novel-narrative-context';
+import { buildActiveNovelFoundation } from '@/features/novel-creation/legacy-novel-adapter';
+import { formatNovelForeshadowingContext } from '@/utils/novel-foreshadowing-workspace';
 import { requestCompletionWithUsage } from '@/services/llm';
 import { parseNovelOutlineChapterRevision } from '@/services/novel-outline-chapter-revision';
 import { buildStoryStateCanon } from '@/services/novel-forecast';
@@ -323,6 +325,8 @@ export function syncForeshadowings(
     if (!keyword) {
       continue;
     }
+    // Author-maintained decisions take precedence over automatic audit reports.
+    if (next.some((item) => item.keyword === keyword && (item.locked || item.status !== 'open'))) continue;
 
     if (entry.planted) {
       const existing = next.find(
@@ -353,7 +357,7 @@ export function syncForeshadowings(
   }
 
   return next.map((item) => {
-    if (item.status === 'open' && chapterIndex - item.plantedChapterIndex >= FORESHADOWING_OVERDUE_AFTER_CHAPTERS) {
+    if (!item.locked && item.status === 'open' && item.plantedChapterIndex > 0 && chapterIndex - item.plantedChapterIndex >= FORESHADOWING_OVERDUE_AFTER_CHAPTERS) {
       return { ...item, note: `已超 ${FORESHADOWING_OVERDUE_AFTER_CHAPTERS} 章未推进` };
     }
     return item;
@@ -381,8 +385,10 @@ function buildOutlineSystemPrompt(
     {
       "title": "卷名",
       "summary": "本卷要解决的冲突与看点，1-2 句",
+      "tone": "本卷节奏或情绪基调（可选）",
+      "foreshadowing": "本卷伏笔边界（可选）",
       "chapters": [
-        { "index": 章序号, "title": "章名", "goal": "本章叙事目标一句话（推进什么/埋下什么钩子）", "sceneEnd": true/false }
+        { "index": 章序号, "title": "章名", "goal": "本章叙事目标一句话（推进什么/埋下什么钩子）", "sceneEnd": true/false, "characterChange": "人物变化（可选）", "foreshadowing": "本章线索（可选）", "endingHook": "章末衔接（可选）" }
       ]
     }
   ]
@@ -399,25 +405,6 @@ function buildOutlineSystemPrompt(
 - 目标要具体可执行，别写空话。不要输出 JSON 以外的文字。`;
 }
 
-function formatProjectBrief(novel: Novel): string {
-  const brief = novel.projectBrief;
-  if (!brief) {
-    return '';
-  }
-
-  return [
-    ['故事 premise', brief.premise],
-    ['主题', brief.theme],
-    ['主角弧光', brief.protagonistArc],
-    ['结局方向', brief.ending],
-    ['第一章目标', brief.firstChapterGoal],
-    ['计划章数', brief.plannedChapters],
-  ]
-    .filter(([, value]) => value !== undefined && String(value).trim().length > 0)
-    .map(([label, value]) => `${label}：${String(value).trim()}`)
-    .join('\n');
-}
-
 function formatOutlineContext(novel: Novel, canon: string): string {
   novel = getNarrativeNovel(novel);
   const setting = [
@@ -427,7 +414,7 @@ function formatOutlineContext(novel: Novel, canon: string): string {
     ['世界冲突', novel.worldConflict],
     ['叙事基调', novel.worldTone],
     ['核心主线', novel.mainPlot],
-    ['初始故事状态', novel.initialStoryState],
+    ['初始故事状态', novel.projectBrief?.firstChapterGoal || novel.initialStoryState],
     ['世界规则', novel.gameRules],
     ['写作风格', novel.writingStyle],
   ]
@@ -464,39 +451,12 @@ function formatOutlineContext(novel: Novel, canon: string): string {
     .map((entry) => `- ${entry.name}：${asString(entry.content).slice(0, 800)}`)
     .join('\n');
 
-  const blueprint = novel.creationBlueprint;
-  const storyCore = blueprint?.storyCore;
-  const protagonistCore = getProtagonistCast(novel.cast).length ? undefined : blueprint?.protagonistCore;
-  const runtimeSeed = blueprint?.runtimeSeed;
-  const blueprintText = blueprint
-    ? [
-        `故事核心：${asString(storyCore?.brief)}`,
-        `核心 premise：${asString(storyCore?.premise)}`,
-        `主题：${asString(storyCore?.theme)}`,
-        `结局：${asString(storyCore?.ending)}`,
-        `故事世界：${asString(storyCore?.worldName)}`,
-        `时代设定：${asString(storyCore?.worldEra)}`,
-        `游玩规则：${asString(storyCore?.gameRules)}`,
-        `主角姓名：${asString(protagonistCore?.name)}`,
-        `主角性别：${asString(protagonistCore?.gender)}`,
-        `主角身份：${asString(protagonistCore?.identity)}`,
-        `主角目标：${asString(protagonistCore?.goal)}`,
-        runtimeSeed ? `运行时世界种子：${asString(runtimeSeed.worldSeed)}` : '',
-        runtimeSeed ? `运行时任务：${asString(runtimeSeed.mission)}` : '',
-        runtimeSeed ? `入场场景：${asString(runtimeSeed.entryScene)}` : '',
-        `创建契约：${asString(blueprint.foundationPrompt)}`,
-      ]
-        .filter((line) => line && line.split('：').slice(1).join('：').trim().length > 0)
-        .join('\n')
-    : '';
+  const foundation = buildActiveNovelFoundation(novel);
 
   return [
     `【小说世界与作者约束】\n${setting || '（未填写结构化世界设定）'}`,
-    asString(novel.foundationPrompt)
-      ? `【稳定创作契约·人物身份以当前角色卡为准】\n${asString(novel.foundationPrompt).slice(0, 6000)}`
-      : '',
-    blueprintText ? `【创建蓝图与稳定契约】\n${blueprintText.slice(0, 6000)}` : '',
-    `【作者项目 brief】\n${formatProjectBrief(novel) || '（未填写项目 brief）'}`,
+    foundation ? `【当前创作契约·由现有设定与角色卡生成】\n${foundation.slice(0, 12000)}` : '',
+    formatNovelForeshadowingContext(novel),
     `【角色卡】\n${castText || '（无）'}`,
     formatProtagonistAuthority(novel.cast),
     NOVEL_CAST_IDENTITY_RULE,
@@ -614,6 +574,9 @@ ${sample || '（无前文）'}
                   title: asString(plan.title),
                   goal: asString(plan.goal),
                   sceneEnd: typeof plan.sceneEnd === 'boolean' ? plan.sceneEnd : undefined,
+                  characterChange: asString(plan.characterChange) || undefined,
+                  foreshadowing: asString(plan.foreshadowing) || undefined,
+                  endingHook: asString(plan.endingHook) || undefined,
                 };
               })
               .filter((plan) => plan.title.length > 0)
@@ -622,6 +585,8 @@ ${sample || '（无前文）'}
           id: `volume-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           title: asString(entry.title) || '未命名卷',
           summary: asString(entry.summary),
+          tone: asString(entry.tone) || undefined,
+          foreshadowing: asString(entry.foreshadowing) || undefined,
           chapters,
         };
       })
@@ -716,7 +681,7 @@ export async function generateNovelOutlineVolume(
   const continuityBrief = [
     existingVolume
       ? `【当前卷现有大纲】\n卷名：${existingVolume.title}\n卷摘要：${existingVolume.summary}\n章节：${existingVolume.chapters
-          .map((chapter) => `第${chapter.index}章《${chapter.title}》：${chapter.goal}`)
+        .map((chapter) => `第${chapter.index}章《${chapter.title}》：${chapter.goal}${chapter.characterChange ? `；人物变化：${chapter.characterChange}` : ''}${chapter.foreshadowing ? `；伏笔：${chapter.foreshadowing}` : ''}${chapter.endingHook ? `；章末衔接：${chapter.endingHook}` : ''}`)
           .join('\n')}\n\n这是一次“${operation === 'append' ? '追加章节' : allowVariableChapterCount ? '修改本卷结构' : '修订章节'}”提案。只修改作者提示明确要求的部分，未提及的卷名、摘要、章节目标和交接信息尽量保留，不要因为重新生成而静默丢失作者内容。${allowVariableChapterCount ? '本次允许为了叙事完整性增加、合并或删除章节，不要求与原章节数相同。' : ''}`
       : '',
     allowVariableChapterCount
@@ -759,8 +724,10 @@ export async function generateNovelOutlineVolume(
   return {
     volume: {
       id: volumeId,
-      title: modelTitle || `第 ${volumeNumber} 卷`,
+      title: modelTitle || existingVolume?.title || `第 ${volumeNumber} 卷`,
       summary: modelSummary || result.outline.summary,
+      tone: result.outline.volumes[0]?.tone ?? existingVolume?.tone,
+      foreshadowing: result.outline.volumes[0]?.foreshadowing ?? existingVolume?.foreshadowing,
       chapters,
       plannedChapterCount: allowVariableChapterCount ? chapters.length : safeChapterCount,
       wordsPerChapter: safeWordsPerChapter,
@@ -808,7 +775,7 @@ export async function generateNovelOutlineChapterRevision({
     .map((chapter) => `第${chapter.index}章 ${chapter.title}\n${chapter.content.slice(0, 700)}`)
     .join('\n\n');
   const volumeOutline = volume.chapters
-    .map((chapter) => `${chapter.index === chapterIndex ? '→' : '-'} 第${chapter.index}章《${chapter.title}》：${chapter.goal}${chapter.sceneEnd ? '［场景收束］' : ''}`)
+        .map((chapter) => `${chapter.index === chapterIndex ? '→' : '-'} 第${chapter.index}章《${chapter.title}》：${chapter.goal}${chapter.characterChange ? `；人物变化：${chapter.characterChange}` : ''}${chapter.foreshadowing ? `；伏笔：${chapter.foreshadowing}` : ''}${chapter.endingHook ? `；章末衔接：${chapter.endingHook}` : ''}${chapter.sceneEnd ? '［场景收束］' : ''}`)
     .join('\n');
 
   const result = await requestCompletionWithUsage({
@@ -816,11 +783,11 @@ export async function generateNovelOutlineChapterRevision({
     messages: [
       {
         role: 'system',
-        content: `你是小说章节大纲编辑。你只修改作者指定的一章，不得生成、删除、重排或改写其他章节。只输出 JSON：\n{\n  "index": ${chapterIndex},\n  "title": "章节标题",\n  "goal": "具体、可执行的本章叙事目标",\n  "sceneEnd": true/false\n}\nindex 必须保持为 ${chapterIndex}；title 与 goal 必须完整。修改应服从作者指令，同时与相邻章节、卷目标、人物和世界设定连续。不要输出 JSON 以外的文字。`,
+        content: `你是小说章节大纲编辑。你只修改作者指定的一章，不得生成、删除、重排或改写其他章节。只输出 JSON：\n{\n  "index": ${chapterIndex},\n  "title": "章节标题",\n  "goal": "具体、可执行的本章叙事目标",\n  "sceneEnd": true/false,\n  "characterChange": "人物变化（可选）",\n  "foreshadowing": "本章线索（可选）",\n  "endingHook": "章末衔接（可选）"\n}\nindex 必须保持为 ${chapterIndex}；title 与 goal 必须完整。修改应服从作者指令，同时与相邻章节、卷目标、人物和世界设定连续。不要输出 JSON 以外的文字。`,
       },
       {
         role: 'user',
-        content: `${contextBlock}\n\n【最近正文】\n${recentText || '（尚无正文）'}${worldContext ? `\n\n【当前小世界设定】\n${worldContext}` : ''}\n\n【当前卷】\n卷名：${volume.title}\n卷目标：${volume.summary || '（未填写）'}\n\n【本卷章节坐标】\n${volumeOutline}\n\n【只允许修改】\n第${target.index}章《${target.title}》\n当前目标：${target.goal}\n当前是否场景收束：${target.sceneEnd ? '是' : '否'}\n\n【作者修改指令】\n${instruction.trim()}`,
+        content: `${contextBlock}\n\n【最近正文】\n${recentText || '（尚无正文）'}${worldContext ? `\n\n【当前小世界设定】\n${worldContext}` : ''}\n\n【当前卷】\n卷名：${volume.title}\n卷目标：${volume.summary || '（未填写）'}\n节奏基调：${volume.tone || '（未填写）'}\n伏笔边界：${volume.foreshadowing || '（未填写）'}\n卷末状态：${volume.handoff?.outgoing || '（未填写）'}\n\n【本卷章节坐标】\n${volumeOutline}\n\n【只允许修改】\n第${target.index}章《${target.title}》\n当前目标：${target.goal}\n当前人物变化：${target.characterChange || '（未填写）'}\n当前伏笔：${target.foreshadowing || '（未填写）'}\n当前章末衔接：${target.endingHook || '（未填写）'}\n当前是否场景收束：${target.sceneEnd ? '是' : '否'}\n\n【作者修改指令】\n${instruction.trim()}`,
       },
     ],
     purpose: 'outline',

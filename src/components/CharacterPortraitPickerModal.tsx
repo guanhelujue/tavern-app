@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -13,9 +13,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Spacing, type ThemePalette } from '@/constants/theme';
-import { DEFAULT_IMAGE_MODEL, imageModelCatalogEntry } from '@/constants/image-models';
+import { imageModelCatalogEntry } from '@/constants/image-models';
 import { useTheme } from '@/hooks/use-theme';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
+import { ModelRoutePicker } from '@/components/ModelRoutePicker';
+import { buildImageModelRouteCatalog, imageModelDisplayName, resolveImageModelRoute } from '@/utils/image-model-route-catalog';
+import { canAutoStartLocalComfy } from '@/services/local-comfy-launcher';
 import { useTavernStore } from '@/store/tavern-store';
 import {
   generateImage,
@@ -23,14 +26,9 @@ import {
 } from '@/services/image-generation';
 import { showAppAlert } from '@/utils/app-alert';
 import {
-  CHARACTER_PRIVATE_PORTRAIT_SCENES,
-  CHARACTER_PORTRAIT_STYLES,
   buildCharacterPrivatePortraitPrompt,
   buildCharacterPortraitPrompt,
-  resolvePortraitDisplayUri,
-  type CharacterPortraitPromptInput,
-  type CharacterPrivatePortraitSceneId,
-  type CharacterPortraitStyleId,
+  type CharacterPrivatePortraitPromptInput,
 } from '@/utils/character-card-portraits';
 import { pickNovelImage } from '@/utils/novel-images';
 import { detectPortraitFocus, type PortraitFocus } from '@/utils/portrait-focus';
@@ -39,30 +37,29 @@ type CharacterPortraitPickerModalProps = {
   visible: boolean;
   gender?: string | null;
   currentUri?: string | null;
-  /** Public portrait used to keep private generations recognizably the same person. */
+  /** Public portrait available as a face reference for private generations. */
   identityReferenceUri?: string | null;
+  /** Private portrait available as a face reference for public generations. */
+  privateReferenceUri?: string | null;
   portraitPrompt?: string;
-  portraitPromptInput?: CharacterPortraitPromptInput;
+  portraitPromptInput?: CharacterPrivatePortraitPromptInput;
   mode?: 'public' | 'private';
   onClose: () => void;
   onSelect: (uri: string | undefined, portraitFocus?: PortraitFocus) => void;
 };
 
-function isExplicitlyAdult(age?: string | null) {
-  const value = age?.trim() ?? '';
-  if (/成年/.test(value)) return true;
-  const match = value.match(/\d+/);
-  return Boolean(match && Number.parseInt(match[0], 10) >= 18);
-}
+type PortraitReferenceSource = 'none' | 'current' | 'alternate';
 
 export function CharacterPortraitPickerModal({
   visible,
   gender,
+  currentUri,
   identityReferenceUri,
+  privateReferenceUri,
   portraitPrompt,
   portraitPromptInput,
   mode = 'public',
-  onClose,
+  onClose: onCloseProp,
   onSelect,
 }: CharacterPortraitPickerModalProps) {
   const theme = useTheme();
@@ -70,63 +67,119 @@ export function CharacterPortraitPickerModal({
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
   const imageGenerationSettings = useTavernStore((state) => state.imageGenerationSettings);
+  const debugPromptInspectorEnabled = useTavernStore((state) => state.generationSettings.debugPromptInspectorEnabled);
   const [view, setView] = useState<'album' | 'generate'>('album');
   const [picking, setPicking] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState('');
   const [shootOutfit, setShootOutfit] = useState('');
   const [shootAction, setShootAction] = useState('');
-  const [portraitStyle, setPortraitStyle] = useState<CharacterPortraitStyleId>('auto');
-  const [portraitVariation, setPortraitVariation] = useState(0);
-  const [privateScene, setPrivateScene] = useState<CharacterPrivatePortraitSceneId>('auto');
+  const [referenceSource, setReferenceSource] = useState<PortraitReferenceSource>('none');
+  const [imageSize, setImageSize] = useState<'portrait' | 'square' | 'landscape'>('portrait');
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
+  const [generationProgress, setGenerationProgress] = useState('');
+  const [generationProviderId, setGenerationProviderId] = useState('');
+  const [generationModelId, setGenerationModelId] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const generationAbortRef = useRef<AbortController | null>(null);
+
+  function stopGeneration() {
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+    setGenerating(false);
+    setGenerationProgress('');
+  }
+
+  function handleClose() {
+    stopGeneration();
+    setModelPickerOpen(false);
+    onCloseProp();
+  }
 
   useEffect(() => {
     if (!visible) {
+      generationAbortRef.current?.abort();
+      generationAbortRef.current = null;
       return;
     }
     const timer = setTimeout(() => {
-      setPortraitStyle('auto');
-      setPortraitVariation(0);
-      setPrivateScene('auto');
+      const currentReference = currentUri?.trim() || '';
+      const alternateReference = (
+        mode === 'private' ? identityReferenceUri : privateReferenceUri
+      )?.trim() || '';
+      setReferenceSource(
+        mode === 'private'
+          ? alternateReference
+            ? 'alternate'
+            : currentReference
+              ? 'current'
+              : 'none'
+          : currentReference
+            ? 'current'
+            : alternateReference
+              ? 'alternate'
+              : 'none',
+      );
+      setImageSize('portrait');
       setShootOutfit('');
       setShootAction('');
       setGenerationPrompt(
         portraitPromptInput
           ? mode === 'private'
-            ? buildCharacterPrivatePortraitPrompt(portraitPromptInput, undefined, 'auto', 0, 'auto')
-            : buildCharacterPortraitPrompt(portraitPromptInput, undefined, 'auto', 0)
+            ? buildCharacterPrivatePortraitPrompt(portraitPromptInput, undefined, 0)
+            : buildCharacterPortraitPrompt(portraitPromptInput, undefined, 0)
           : portraitPrompt?.trim() ?? '',
       );
       setGenerationError('');
+      setGenerationProgress('');
+      const imageSettings = useTavernStore.getState().imageGenerationSettings;
+      setGenerationProviderId(imageSettings.providerId);
+      setGenerationModelId(imageSettings.providers[imageSettings.providerId]?.modelId ?? '');
+      setModelPickerOpen(false);
+      setGenerating(false);
       setView(mode === 'private' ? 'generate' : 'album');
     }, 0);
     return () => clearTimeout(timer);
-  }, [mode, portraitPrompt, portraitPromptInput, visible]);
+  }, [
+    currentUri,
+    identityReferenceUri,
+    mode,
+    portraitPrompt,
+    portraitPromptInput,
+    privateReferenceUri,
+    visible,
+  ]);
 
-  function rebuildPrompt(
-    style: CharacterPortraitStyleId,
-    variation: number,
-    scene: CharacterPrivatePortraitSceneId = privateScene,
-  ) {
-    setPortraitStyle(style);
-    setPortraitVariation(variation);
-    setPrivateScene(scene);
-    if (portraitPromptInput) {
-      setGenerationPrompt(
-        mode === 'private'
-          ? buildCharacterPrivatePortraitPrompt(portraitPromptInput, undefined, style, variation, scene)
-          : buildCharacterPortraitPrompt(portraitPromptInput, undefined, style, variation),
-      );
-    }
-  }
+  useEffect(() => () => {
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+  }, []);
 
-  const identityReference = useMemo(
-    () => mode === 'private'
-      ? resolvePortraitDisplayUri(identityReferenceUri, gender)
-      : '',
-    [gender, identityReferenceUri, mode],
+  const alternateReferenceUri = useMemo(
+    () => (mode === 'private' ? identityReferenceUri : privateReferenceUri)?.trim() || '',
+    [identityReferenceUri, mode, privateReferenceUri],
   );
+
+  const referenceOptions = useMemo(() => {
+    const currentReference = currentUri?.trim() || '';
+    return [
+      {
+        id: 'current' as const,
+        label: mode === 'private' ? '当前私密照片' : '当前公开立绘',
+        uri: currentReference,
+      },
+      {
+        id: 'alternate' as const,
+        label: mode === 'private' ? '公开立绘' : '私密照片',
+        uri: alternateReferenceUri,
+      },
+    ].filter((option) => Boolean(option.uri));
+  }, [alternateReferenceUri, currentUri, mode]);
+
+  const referenceUri = useMemo(() => {
+    const option = referenceOptions.find((item) => item.id === referenceSource);
+    return option?.uri || '';
+  }, [referenceOptions, referenceSource]);
 
   async function handlePickAlbum() {
     if (picking) {
@@ -138,7 +191,7 @@ export function CharacterPortraitPickerModal({
       if (uri) {
         const portraitFocus = await detectPortraitFocus(uri, gender);
         onSelect(uri, portraitFocus);
-        onClose();
+        handleClose();
       }
     } catch (error) {
       showAppAlert(
@@ -154,11 +207,15 @@ export function CharacterPortraitPickerModal({
     if (generating) {
       return;
     }
-    const provider = imageGenerationSettings.providerId
-      ? imageGenerationSettings.providers[imageGenerationSettings.providerId]
-      : undefined;
-    const baseUrl = provider?.baseUrl.trim() || '';
-    const model = provider?.modelId.trim() || '';
+    let route: ReturnType<typeof resolveImageModelRoute>;
+    try {
+      route = resolveImageModelRoute(imageGenerationSettings.providers, generationModelId, generationProviderId);
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : '请先选择可用的图像模型。');
+      return;
+    }
+    const { provider, modelId: model } = route;
+    const baseUrl = provider.baseUrl.trim();
     const basePrompt = generationPrompt.trim();
     const cleanPrompt = [
       basePrompt,
@@ -166,35 +223,30 @@ export function CharacterPortraitPickerModal({
       shootAction.trim() ? `本次动作：${shootAction.trim()}。` : '',
     ].filter(Boolean).join('\n');
 
-    if (!provider) {
-      setGenerationError('请先到「系统设置 → 图像生成」选择图像厂商。');
-      return;
-    }
-    if (provider.auth !== 'none' && !provider.apiKey.trim()) {
-      setGenerationError(`请先填写「${provider.name}」的 API Key。`);
+    if ((provider.auth === 'bearer' || provider.auth === 'x-api-key' || provider.auth === 'x-goog-api-key') && !provider.apiKey.trim()) {
+      setGenerationError(`请先在「模型连接 → 图像引擎」填写「${provider.name}」的 API Key。`);
       return;
     }
     if (!basePrompt) {
       setGenerationError('请先填写人像提示词。');
       return;
     }
-    if (mode === 'private' && !isExplicitlyAdult(portraitPromptInput?.age)) {
-      setGenerationError('私密影像只为年龄字段明确为 18 岁以上的角色生成。');
-      return;
-    }
-    if (!model) {
-      setGenerationError('请先在「系统设置 → 图像生成」填写模型 ID。');
-      return;
-    }
-    if (mode === 'private' && identityReference && !supportsIdentityReference) {
-      setGenerationError(
-        '当前图像协议不会发送公开参考图，继续生成一定存在换脸风险。请切换到 Gemini 或 Responses 图像协议后再生成。',
-      );
+    if (referenceUri && !supportsIdentityReference) {
+      setGenerationError('当前图像模型不支持通过此接口使用参考图，请切换模型或取消参考图。');
       return;
     }
 
+    const dimensions = imageSize === 'square'
+      ? { width: 1024, height: 1024 }
+      : imageSize === 'landscape'
+        ? { width: 1024, height: 768 }
+        : { width: 768, height: 1024 };
+
     setGenerating(true);
     setGenerationError('');
+    setGenerationProgress(`准备提交到${provider.name}…`);
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
     try {
       const result = await generateImage({
         apiSettings: {
@@ -202,34 +254,56 @@ export function CharacterPortraitPickerModal({
           apiKey: provider.apiKey,
           protocol: provider.protocol,
           auth: provider.auth,
+          providerId: provider.id,
+          providerName: provider.name,
+          debugPromptInspectorEnabled,
         },
         purpose: 'portrait',
         prompt: cleanPrompt,
         model,
-        referenceImageUri: identityReference || undefined,
+        referenceImageUri: referenceUri || undefined,
+        ...dimensions,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (generationAbortRef.current === controller && !controller.signal.aborted) {
+            setGenerationProgress(progress.message ?? progress.phase);
+          }
+        },
       });
+      if (controller.signal.aborted || !visible) return;
       const portraitFocus = await detectPortraitFocus(result.uri, gender);
+      if (controller.signal.aborted || !visible) return;
       onSelect(result.uri, portraitFocus);
-      onClose();
+      handleClose();
     } catch (error) {
+      if (controller.signal.aborted) return;
       setGenerationError(error instanceof Error ? error.message : '图像生成失败，请稍后重试。');
     } finally {
-      setGenerating(false);
+      if (generationAbortRef.current === controller) {
+        generationAbortRef.current = null;
+        setGenerating(false);
+        setGenerationProgress('');
+      }
     }
   }
 
-  const selectedImageProvider = imageGenerationSettings.providers[imageGenerationSettings.providerId];
-  const selectedImageModel = imageModelCatalogEntry(selectedImageProvider?.modelId);
+  const selectedImageProvider = generationProviderId
+    ? imageGenerationSettings.providers[generationProviderId]
+    : undefined;
+  const selectedImageModel = imageModelCatalogEntry(generationModelId);
   const selectedImageProtocol =
     !selectedImageProvider?.protocol || selectedImageProvider.protocol === 'auto'
       ? selectedImageModel?.protocol
       : selectedImageProvider.protocol;
   const supportsIdentityReference = imageProtocolSupportsReferenceImage(selectedImageProtocol);
+  const imageModelCatalog = useMemo(() => buildImageModelRouteCatalog(
+    imageGenerationSettings.providers, generationProviderId,
+  ), [imageGenerationSettings.providers, generationProviderId]);
 
   return (
-    <KeyboardSafeModal visible={visible} onRequestClose={onClose} scrollable>
+    <KeyboardSafeModal visible={visible} onRequestClose={handleClose} scrollable>
       <View style={styles.backdrop}>
-        <Pressable style={styles.dismiss} onPress={onClose} />
+        <Pressable style={styles.dismiss} onPress={handleClose} />
         <View
           style={[
             styles.sheet,
@@ -243,11 +317,11 @@ export function CharacterPortraitPickerModal({
               <Text style={styles.title}>{mode === 'private' ? '私密影像' : '选择立绘'}</Text>
               <Text style={styles.subtitle}>
                 {mode === 'private'
-                  ? '与公开立绘分开保存，但继承同一人物身份。采用泳装、浴袍、温泉或旅行摄影等合规生活场景。'
+                  ? '与公开立绘分开保存，可把公开立绘或现有私密照片作为脸部参考；场景、服装与动作由本次拍摄决定。'
                   : '为当前角色上传独立图片，或根据人物档案生成专属立绘。'}
               </Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={8}>
+            <Pressable onPress={handleClose} hitSlop={8}>
               <Text style={styles.link}>关闭</Text>
             </Pressable>
           </View>
@@ -291,100 +365,53 @@ export function CharacterPortraitPickerModal({
             </View>
           ) : (
             <View style={styles.generatePanel}>
-              <View style={styles.styleHeader}>
-                <View style={styles.styleHeaderCopy}>
-                  <Text style={styles.styleTitle}>{mode === 'private' ? '私人镜头导演' : '视觉导演'}</Text>
-                  <Text style={styles.styleHint}>
-                    {mode === 'private'
-                      ? '默认采用真人纪实摄影，并以公开立绘锁定同一张脸；只改变场景、服装与镜头。'
-                      : '自动模式固定使用真人纪实摄影，只变化镜头、动作与真实环境；艺术画风需手动选择。'}
-                  </Text>
+              <View style={styles.referenceSection}>
+                <View style={styles.shootDirectionHeader}>
+                  <Text style={styles.shootDirectionTitle}>脸部参考</Text>
                 </View>
-                <Pressable
-                  onPress={() => rebuildPrompt(portraitStyle, portraitVariation + 1, privateScene)}
-                  disabled={!portraitPromptInput}
-                  style={({ pressed }) => [
-                    styles.variationButton,
-                    (!portraitPromptInput || pressed) && { opacity: 0.5 },
-                  ]}>
-                  <Text style={styles.variationButtonText}>换一套构图</Text>
-                </Pressable>
-              </View>
-              {mode === 'private' ? (
-                <View style={styles.privateSceneSection}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.styleChips}>
+                  {referenceOptions.map((item) => {
+                    const active = referenceSource === item.id;
+                    return (
+                      <Pressable
+                        key={item.id}
+                        onPress={() => setReferenceSource(active ? 'none' : item.id)}
+                        style={[styles.styleChip, active && styles.styleChipActive]}>
+                        <Text style={[styles.styleChipText, active && styles.styleChipTextActive]}>
+                          {item.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+                {referenceUri ? (
                   <View style={styles.identityLockRow}>
-                    {identityReference ? (
-                      <Image source={{ uri: identityReference }} style={styles.identityThumb} contentFit="cover" />
-                    ) : null}
+                    <Image
+                      source={{ uri: referenceUri }}
+                      style={styles.identityThumb}
+                      contentFit="cover"
+                    />
                     <View style={styles.identityLockCopy}>
                       <Text style={styles.identityLockTitle}>
-                        {identityReference && supportsIdentityReference
-                          ? '身份参考已锁定'
-                          : identityReference
-                            ? '当前协议不支持参考图'
-                            : '尚无公开立绘参考'}
+                        {supportsIdentityReference ? '参考图已选择' : '当前协议不支持参考图'}
                       </Text>
                       <Text style={styles.identityLockHint}>
-                        {identityReference && supportsIdentityReference
-                          ? '私密图会继承公开立绘的脸、发型、肤色、年龄感与体格。'
-                          : identityReference
-                            ? 'OpenAI Images generations 只能接收文字；切换 Gemini 或 Responses 图像协议可启用身份锁定。'
-                            : '先添加公开立绘，才能避免第二张图重新选角。'}
+                        {supportsIdentityReference
+                          ? '只保持脸部一致；发型、服装、姿势、动作与场景按本次提示词生成。'
+                          : '当前图像连接不支持参考图，请选择其他连接。'}
                       </Text>
                     </View>
                   </View>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.styleChips}>
-                    {CHARACTER_PRIVATE_PORTRAIT_SCENES.map((item) => {
-                      const active = privateScene === item.id;
-                      return (
-                        <Pressable
-                          key={item.id}
-                          onPress={() => rebuildPrompt(portraitStyle, portraitVariation, item.id)}
-                          disabled={!portraitPromptInput}
-                          style={[
-                            styles.styleChip,
-                            active && styles.styleChipActive,
-                            !portraitPromptInput && { opacity: 0.5 },
-                          ]}>
-                          <Text style={[styles.styleChipText, active && styles.styleChipTextActive]}>
-                            {item.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              ) : null}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.styleChips}>
-                {CHARACTER_PORTRAIT_STYLES.map((item) => {
-                  const active = portraitStyle === item.id;
-                  return (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => rebuildPrompt(item.id, portraitVariation, privateScene)}
-                      disabled={!portraitPromptInput}
-                      style={[
-                        styles.styleChip,
-                        active && styles.styleChipActive,
-                        !portraitPromptInput && { opacity: 0.5 },
-                      ]}>
-                      <Text style={[styles.styleChipText, active && styles.styleChipTextActive]}>
-                        {item.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+                ) : (
+                  <Text style={styles.referenceHint}>不附带参考图，完全按当前提示词生成。</Text>
+                )}
+              </View>
               <View style={styles.shootDirection}>
                 <View style={styles.shootDirectionHeader}>
                   <Text style={styles.shootDirectionTitle}>本次拍摄</Text>
-                  <Text style={styles.shootDirectionHint}>不自动推断，由你填写</Text>
                 </View>
                 <View style={[styles.shootFieldRow, width < 560 && styles.shootFieldRowCompact]}>
                   <View style={styles.shootField}>
@@ -440,12 +467,51 @@ export function CharacterPortraitPickerModal({
                   },
                 ]}
               />
+              <View style={styles.imageSizeSection}>
+                <Text style={styles.shootDirectionTitle}>图像模型</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="选择本次图像模型"
+                  accessibilityState={{ disabled: generating }}
+                  disabled={generating}
+                  onPress={() => setModelPickerOpen(true)}
+                  style={[styles.providerSelect, { borderColor: theme.outlineVariant, backgroundColor: theme.surface }, generating && { opacity: 0.55 }]}>
+                  <View style={styles.providerSelectCopy}>
+                    <Text style={styles.providerSelectTitle}>{imageModelDisplayName(generationModelId)}</Text>
+                    <Text style={styles.providerSelectHint}>
+                      {selectedImageProvider ? `使用接口：${selectedImageProvider.name}` : '在“模型连接 → 图像引擎”中配置接口'}
+                    </Text>
+                  </View>
+                  <Text style={styles.providerSelectArrow}>选择 ›</Text>
+                </Pressable>
+                {selectedImageProtocol === 'comfyui' && canAutoStartLocalComfy(selectedImageProvider?.baseUrl ?? '') ? (
+                  <Text style={styles.generateMeta}>本地服务未运行时会自动后台启动，就绪后继续生成。</Text>
+                ) : null}
+                <Text style={styles.shootDirectionTitle}>图片尺寸</Text>
+                <View style={styles.imageSizeRow}>
+                  {[
+                    { id: 'portrait' as const, label: '竖图 768×1024' },
+                    { id: 'square' as const, label: '方图 1024×1024' },
+                    { id: 'landscape' as const, label: '横图 1024×768' },
+                  ].map((item) => (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => setImageSize(item.id)}
+                      style={[styles.imageSizeChip, imageSize === item.id && styles.imageSizeChipActive]}>
+                      <Text style={[styles.imageSizeChipText, imageSize === item.id && styles.imageSizeChipTextActive]}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
               <Text style={styles.generateMeta}>
-                {selectedImageModel?.label ?? (imageGenerationSettings.providers[imageGenerationSettings.providerId]?.modelId || DEFAULT_IMAGE_MODEL)}
-                {imageGenerationSettings.providerId
-                  ? ` · ${imageGenerationSettings.providers[imageGenerationSettings.providerId]?.name ?? '未找到厂商'}`
-                  : ' · 未选择图像厂商'}
+                {imageModelDisplayName(generationModelId)}
+                {generationProviderId
+                  ? ` · ${selectedImageProvider?.name ?? '未找到接口'}`
+                  : ' · 未选择图像接口'}
               </Text>
+              {generationProgress ? <Text accessibilityLiveRegion="polite" style={styles.generateProgress}>{generationProgress}</Text> : null}
               {generationError ? <Text style={styles.generateError}>{generationError}</Text> : null}
             </View>
           )}
@@ -466,6 +532,21 @@ export function CharacterPortraitPickerModal({
           ) : null}
         </View>
       </View>
+      <ModelRoutePicker
+        visible={modelPickerOpen}
+        title="选择图像模型"
+        description="先选模型，再使用已配置的图像接口"
+        catalog={imageModelCatalog}
+        selectedModelId={generationModelId}
+        selectedProviderId={generationProviderId}
+        onClose={() => setModelPickerOpen(false)}
+        onSelect={(modelId, providerId) => {
+          setGenerationModelId(modelId);
+          setGenerationProviderId(providerId);
+          setGenerationError('');
+          setModelPickerOpen(false);
+        }}
+      />
     </KeyboardSafeModal>
   );
 }
@@ -577,39 +658,6 @@ function createStyles(theme: ThemePalette) {
     paddingHorizontal: Spacing.three,
     gap: Spacing.two,
   },
-  styleHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
-  },
-  styleHeaderCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  styleTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: theme.text,
-  },
-  styleHint: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: theme.textMuted,
-  },
-  variationButton: {
-    minHeight: 32,
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: theme.primary,
-    borderRadius: 999,
-  },
-  variationButtonText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: theme.primary,
-  },
   styleChips: {
     gap: 7,
     paddingRight: Spacing.three,
@@ -627,10 +675,6 @@ function createStyles(theme: ThemePalette) {
     color: theme.text,
     fontSize: 12,
     fontWeight: '800',
-  },
-  shootDirectionHint: {
-    color: theme.textMuted,
-    fontSize: 10,
   },
   shootFieldRow: {
     flexDirection: 'row',
@@ -656,8 +700,13 @@ function createStyles(theme: ThemePalette) {
     paddingVertical: 8,
     fontSize: 12,
   },
-  privateSceneSection: {
+  referenceSection: {
     gap: 9,
+  },
+  referenceHint: {
+    color: theme.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
   },
   identityLockRow: {
     flexDirection: 'row',
@@ -688,6 +737,63 @@ function createStyles(theme: ThemePalette) {
     color: theme.textMuted,
     fontSize: 11,
     lineHeight: 16,
+  },
+  imageSizeSection: {
+    gap: 7,
+  },
+  providerSelect: {
+    minHeight: 54,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  providerSelectCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  providerSelectTitle: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  providerSelectHint: {
+    color: theme.textMuted,
+    fontSize: 11,
+  },
+  providerSelectArrow: {
+    color: theme.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  imageSizeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  imageSizeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: theme.outlineVariant,
+    borderRadius: 999,
+    backgroundColor: theme.surface,
+  },
+  imageSizeChipActive: {
+    borderColor: theme.primary,
+    backgroundColor: theme.primaryContainer,
+  },
+  imageSizeChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.textSecondary,
+  },
+  imageSizeChipTextActive: {
+    color: theme.primary,
   },
   styleChip: {
     paddingHorizontal: 11,
@@ -721,6 +827,11 @@ function createStyles(theme: ThemePalette) {
   generateMeta: {
     fontSize: 11,
     color: theme.textMuted,
+  },
+  generateProgress: {
+    fontSize: 12,
+    color: theme.primary,
+    lineHeight: 17,
   },
   generateError: {
     fontSize: 12,

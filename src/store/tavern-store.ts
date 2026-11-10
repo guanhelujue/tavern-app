@@ -16,6 +16,8 @@ import {
 } from '@/constants/theme';
 import { requestChatCompletion, requestCompletionWithUsage } from '@/services/llm';
 import { buildNovelCharacterContext } from '@/utils/novel-narrative-context';
+import { buildChapterInstruction, normalizeChapterPlanning } from '@/utils/novel-chapter-planning';
+import { assertChapterLength, checkChapterLength, countChapterWords, resolveChapterTargetWords } from '@/utils/novel-chapter-length';
 import {
   generateNovelDirectPlan,
   type GenerateNovelDirectPlanInput,
@@ -53,7 +55,6 @@ import {
   factCheckChapter,
   generateOutline,
   generateOutlineInVolumes,
-  getDraftChapters,
   getFinalChapters,
   getNextChapterIndex,
   resolveContinuationSettings,
@@ -86,7 +87,6 @@ import {
 } from '@/services/novel-rewrite-pipeline';
 import {
   DEFAULT_NOVEL_CONTINUATION_SETTINGS,
-  resolveWriteSegments,
 } from '@/constants/novel-continuation';
 import {
   formatNovelOutlineChapterMarker,
@@ -94,10 +94,9 @@ import {
   resolveNovelOutlineTurnRuntime,
 } from '@/services/novel-outline-runtime';
 import {
-  clampBatchChapterCount,
-  getBatchAuditRisk,
-  getLatestChapterAudit,
-} from '@/services/novel-batch-generation';
+  getNovelAuditSourceFingerprint,
+  isNovelRewriteAuditCurrent,
+} from '@/services/novel-audit-freshness';
 import {
   startStreamingForeground,
   stopStreamingForeground,
@@ -113,6 +112,7 @@ import {
   resolveShortTermMemoryPrompt,
 } from '@/constants/novel-memory';
 import { normalizeWritingStyle } from '@/constants/writing-styles';
+import { buildStoryImportPatch, storyImportFingerprint, type StoryImportCandidate } from '@/features/story-import/model';
 import {
   CHAT_FONT_SIZE_DEFAULT,
   clampChatFontSize,
@@ -218,9 +218,6 @@ import {
 } from '@/utils/session-config';
 import { stripNovelChapterExpansion } from '@/utils/novel-chapter-expansion';
 import { normalizeNovelUserInput } from '@/utils/novel-user-input';
-import {
-  isNovelContinuationProject,
-} from '@/utils/novel-routing';
 import {
   resolveNovelOutlineOptions,
   type NovelOutlineGenerationOptions,
@@ -502,6 +499,12 @@ function detachCharacterBiographies(character: NovelCastCharacter) {
   return { character: persistentCharacter as NovelCastCharacter, biographies };
 }
 
+function retireBatchGenerationJob(job: NovelGenerationJob): NovelGenerationJob {
+  return job.kind === 'batch' && job.status !== 'completed' && job.status !== 'cancelled'
+    ? { ...job, status: 'cancelled', currentStep: '批量写作已移除，已生成章节保留', updatedAt: nowIso() }
+    : job;
+}
+
 function normalizeNovel(novel: Novel): Novel {
   const rawCast = Array.isArray(novel.cast)
     ? novel.cast.map((item, index) => normalizeCastCharacter(item, index))
@@ -634,8 +637,9 @@ function normalizeNovel(novel: Novel): Novel {
         : 1,
     // 续写工程标记只由显式导入标记或已有章节决定。
     // 普通小说生成大纲时也会写入 continuationSettings（例如目标字数），不能据此误判为续写。
-    isContinuationProject: isNovelContinuationProject(novel),
-    creationMode: novel.creationMode === 'workbench' ? 'workbench' : 'interactive',
+    // Historical backup metadata only; source no longer selects a creation mode.
+    isContinuationProject: Boolean(novel.isContinuationProject),
+    creationMode: 'workbench',
     agentMode: novel.agentMode === 'direct' ? 'direct' : 'narrator',
     agentReviewMode: novel.agentReviewMode === 'deep' ? 'deep' : 'fast',
     foundationPrompt: novel.foundationPrompt?.trim() || undefined,
@@ -671,6 +675,7 @@ function normalizeNovel(novel: Novel): Novel {
       novel.chatBackgroundOpacity ?? DEFAULT_CHAT_BACKGROUND_OPACITY,
     ),
     quickTravel: normalizedQuickTravel,
+    novelGenerationJobs: novel.novelGenerationJobs?.map(retireBatchGenerationJob),
   };
 }
 
@@ -939,7 +944,7 @@ type TavernActions = {
   updateNovelChapter: (
     novelId: string,
     chapterId: string,
-    updates: Partial<Pick<NovelChapter, 'title' | 'summary' | 'goal' | 'content'>>,
+    updates: Partial<Pick<NovelChapter, 'title' | 'summary' | 'goal' | 'content' | 'planning' | 'targetWords'>>,
   ) => void;
   /** Promote a draft chapter to final (accept into the book). */
   finalizeNovelChapter: (novelId: string, chapterId: string) => Promise<void>;
@@ -951,6 +956,7 @@ type TavernActions = {
     audit: Pick<
       NovelChapterAudit,
       'chapterId' | 'chapterIndex' | 'issues' | 'passed' | 'modelId'
+      | 'sourceFingerprint' | 'stale'
     >,
   ) => void;
   /** Replace the foreshadowing ledger. */
@@ -978,6 +984,13 @@ type TavernActions = {
     outline: NovelOutline,
     reason?: string,
   ) => void;
+  /** Apply only reviewed story materials in one state update, rejecting stale previews. */
+  applyNovelStoryImport: (
+    novelId: string,
+    candidate: StoryImportCandidate,
+    selectedIds: string[],
+    baseFingerprint: string,
+  ) => { appliedCount: number; skipped: string[] };
   /** Clear a scoped outline while keeping its last snapshot for recovery. */
   clearNovelOutlineAtScope: (novelId: string, scopeId: string, reason?: string) => void;
   /** Update continuation pipeline settings. */
@@ -1016,7 +1029,7 @@ type TavernActions = {
     },
   ) => Promise<{ ran: boolean; paused: boolean }>;
   /** 把状态分析结果同步到知识库（角色卡 / lore）。返回报告。 */
-  syncNovelKnowledgeBase: (novelId: string) => import('@/services/novel-knowledge-sync').KnowledgeSyncReport;
+  syncNovelKnowledgeBase: (novelId: string, options?: { refreshGenerated?: boolean }) => import('@/services/novel-knowledge-sync').KnowledgeSyncReport;
   /** 全文检索 + LLM 精炼角色档案（appearance/personality/privacy/evidence 等）。 */
   enrichNovelCharacters: (
     novelId: string,
@@ -1047,6 +1060,9 @@ type TavernActions = {
       planId?: string;
       userGuide?: { endingPreference: string; targetLength: string; mustKeep: string; mustAvoid: string };
       userInstruction?: string;
+      planning?: NovelChapter['planning'];
+      targetWords?: number;
+      targetChapterIndex?: number;
       branchId?: string;
       resumeJobId?: string;
       onDelta?: (delta: string) => void;
@@ -1055,11 +1071,6 @@ type TavernActions = {
   resumeNovelGenerationJob: (novelId: string, jobId: string) => Promise<string | null>;
   abandonNovelGenerationJob: (novelId: string, jobId: string) => void;
   retryNovelGenerationJob: (novelId: string, jobId: string) => Promise<string | null>;
-  batchGenerateNovelChapters: (
-    novelId: string,
-    count: number,
-    options?: { onProgress?: (done: number, total: number, title?: string) => void },
-  ) => Promise<{ completed: number; stopped: boolean; reason?: string }>;
   /** 8 维审查一章（结果挂 novelRewriteAudits）。 */
   auditRewriteChapter: (novelId: string, chapterId: string) => Promise<void>;
   /** 确认草稿为正式章节：提取状态增量 → 更新 StoryState → 快照 → （可选分支）。 */
@@ -1301,7 +1312,7 @@ function resolveUtilityApiSettingsForSideJobs(
   providers: Record<string, LlmProvider>,
   generationSettings: GenerationSettings,
 ): ApiSettings {
-  return resolveApiSettings(providers, generationSettings, { purpose: 'utility' });
+  return resolveApiSettings(providers, generationSettings, { purpose: 'utility', task: 'outline' });
 }
 
 function resolveNovelAgentApiSettings(
@@ -2221,7 +2232,7 @@ export const useTavernStore = create<TavernStore>()(
           foundationPrompt: input.foundationPrompt?.trim() || undefined,
           creationBlueprint: input.creationBlueprint ?? undefined,
           projectBrief: input.projectBrief ?? undefined,
-          creationMode: input.creationMode === 'workbench' ? 'workbench' : 'interactive',
+          creationMode: 'workbench',
           agentMode: input.agentMode === 'direct' ? 'direct' : 'narrator',
           agentReviewMode: input.agentReviewMode === 'deep' ? 'deep' : 'fast',
           dialogueSamples: Array.isArray(input.dialogueSamples) ? input.dialogueSamples : [],
@@ -2454,7 +2465,7 @@ export const useTavernStore = create<TavernStore>()(
                         ? input.creationBlueprint ?? undefined
                         : novel.creationBlueprint,
                       projectBrief: input.projectBrief ?? novel.projectBrief,
-                      creationMode: input.creationMode ?? novel.creationMode,
+                      creationMode: 'workbench',
                       agentMode:
                         input.agentMode === 'direct'
                           ? 'direct'
@@ -4452,7 +4463,10 @@ export const useTavernStore = create<TavernStore>()(
         }
       },
       finalizeNovelChapter: async (novelId, chapterId) => {
-        await get().confirmNovelChapter(novelId, chapterId);
+        const result = await get().confirmNovelChapter(novelId, chapterId);
+        if (!result.committed) {
+          throw new Error(`章节未定稿：${result.warnings.join('；') || '验收未通过'}`);
+        }
       },
       deleteNovelChapter: (novelId, chapterId) => {
         const current = useTavernStore.getState().novels.find((novel) => novel.id === novelId);
@@ -4506,6 +4520,34 @@ export const useTavernStore = create<TavernStore>()(
               : novel,
           ),
         })),
+      applyNovelStoryImport: (novelId, candidate, selectedIds, baseFingerprint) => {
+        const lockOwner = acquireNovelWriteLock(novelId, 'story-import');
+        if (!lockOwner) throw new Error('作品正在更新状态，请稍后再写入。');
+        let report = { appliedCount: 0, skipped: [] as string[] };
+        try {
+          set((state) => {
+            const novel = state.novels.find((item) => item.id === novelId);
+            if (!novel) throw new Error('作品已不存在。');
+            if (novel.quickTravel?.config.enabled) throw new Error('请在普通小说中整理资料；快穿世界需在各世界内维护。');
+            if (novel.novelGenerationJobs?.some((job) => job.status === 'running')) throw new Error('请等待当前写作任务结束后再写入资料。');
+            if (storyImportFingerprint(novel) !== baseFingerprint) throw new Error('作品资料已发生变化，请刷新对照后重新选择。');
+            const result = buildStoryImportPatch(novel, candidate, selectedIds);
+            if (!result.appliedCount) throw new Error('没有可写入的所选内容，请重新检查选择。');
+            report = { appliedCount: result.appliedCount, skipped: result.skipped };
+            let updated = { ...novel, ...result.patch, updatedAt: nowIso() };
+            if (result.patch.outline) {
+              if (novel.outline) updated = appendNovelOutlineVersion(updated, 'novel', novel.outline, 'manual', '粘贴识别前的大纲');
+              updated = appendNovelOutlineVersion(updated, 'novel', result.patch.outline, 'manual', '采用粘贴识别的资料');
+            }
+            return { novels: state.novels.map((item) => item.id === novelId ? updated : item) };
+          });
+          const updated = useTavernStore.getState().novels.find((item) => item.id === novelId);
+          if (updated) void persistNovelMetadata(updated).catch((error) => console.error('[novel] failed to persist imported story materials', error));
+          return report;
+        } finally {
+          releaseNovelWriteLock(novelId, lockOwner);
+        }
+      },
       saveNovelOutlineAtScope: (novelId, scopeId, outline, reason) => {
         set((state) => ({
           novels: state.novels.map((novel) => {
@@ -4907,9 +4949,10 @@ export const useTavernStore = create<TavernStore>()(
         }
 
         const issues: NovelAuditIssue[] = auditChapterWithRules(chapter);
+        const sourceFingerprint = getNovelAuditSourceFingerprint(novel, chapter);
 
         const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
+          purpose: 'utility', task: 'review',
         });
         const recentChapters = getFinalChapters(novel)
           .filter((item) => item.index < chapter.index)
@@ -4935,6 +4978,13 @@ export const useTavernStore = create<TavernStore>()(
           issues,
           passed: issues.length === 0,
           modelId,
+          sourceFingerprint,
+          stale: (() => {
+            const latestNovel = useTavernStore.getState().novels.find((item) => item.id === novelId);
+            const latestChapter = latestNovel?.chapters?.find((item) => item.id === chapterId);
+            return !latestNovel || !latestChapter ||
+              getNovelAuditSourceFingerprint(latestNovel, latestChapter) !== sourceFingerprint;
+          })(),
         });
         useTavernStore
           .getState()
@@ -4958,10 +5008,11 @@ export const useTavernStore = create<TavernStore>()(
         }
 
         const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
+          purpose: 'utility', task: 'outline',
         });
-        const nextIndex = getNextChapterIndex(novel);
         const outlineOptions = resolveNovelOutlineOptions(novel, options);
+        const nextIndex = outlineOptions.startChapterIndex ?? getNextChapterIndex(novel);
+        const { startChapterIndex: _startChapterIndex, ...outlineRequest } = outlineOptions;
 
         const jobId = makeId('job-outline');
         const startedAt = nowIso();
@@ -4983,7 +5034,7 @@ export const useTavernStore = create<TavernStore>()(
             nextChapterIndex: nextIndex,
             analysis: novel.novelStoryAnalysis ?? null,
             targetChapterCount: outlineOptions.targetChapterCount ?? 12,
-            ...outlineOptions,
+            ...outlineRequest,
             onProgress: (completedChapters, totalChapters, currentVolume) => {
               useTavernStore.getState().upsertNovelGenerationJob(novelId, {
                 jobId,
@@ -5049,7 +5100,7 @@ export const useTavernStore = create<TavernStore>()(
         const route = forecast?.routes.find((item) => item.routeId === plan.routeId) ?? null;
 
         const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
+          purpose: 'utility', task: 'outline',
         });
         const nextIndex = getNextChapterIndex(novel);
         const outlineOptions = resolveNovelOutlineOptions(novel, options);
@@ -5120,119 +5171,6 @@ export const useTavernStore = create<TavernStore>()(
           throw error;
         }
       },
-      batchGenerateNovelChapters: async (novelId, count, options): Promise<{ completed: number; stopped: boolean; reason?: string }> => {
-        const generateCount = clampBatchChapterCount(count);
-        const current = useTavernStore.getState().novels.find((item) => item.id === novelId);
-        if (!current) throw new Error('小说不存在。');
-        if ((current.novelGenerationJobs ?? []).some((job) =>
-          (job.kind === 'write' || job.kind === 'batch') && job.status === 'running')) {
-          throw new Error('该小说已有续写任务运行中，请等待完成。');
-        }
-
-        const jobId = makeId('job-batch');
-        const startedAt = nowIso();
-        useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-          jobId,
-          kind: 'batch',
-          mode: 'continue',
-          status: 'running',
-          progress: 0,
-          currentStep: '准备批量续写',
-          startedAt,
-          updatedAt: startedAt,
-        });
-
-        try {
-          for (let step = 0; step < generateCount; step += 1) {
-            const state = useTavernStore.getState();
-            const novel = state.novels.find((item) => item.id === novelId);
-
-            if (!novel) {
-              throw new Error('小说不存在。');
-            }
-            const continuationSettings = resolveContinuationSettings(novel);
-
-            // 清理空草稿（生成失败残留），避免被误当作正式章节；非空草稿保留给用户处理。
-            const drafts = getDraftChapters(novel);
-            for (const draft of drafts) {
-              if (!draft.content.trim()) {
-                useTavernStore.getState().deleteNovelChapter(novelId, draft.id);
-              }
-            }
-
-            // 新管线续写：复用状态分析 + 已选路线上下文。
-            const chapterId = await useTavernStore.getState().rewriteNovelNextChapter(novelId, {});
-            if (!chapterId) {
-              throw new Error('生成失败，请检查模型配置后重试。');
-            }
-
-            const latest = useTavernStore
-              .getState()
-              .novels.find((item) => item.id === novelId);
-            const chapter = latest?.chapters?.find((item) => item.id === chapterId);
-
-            // 确认入库：状态增量提取 + StoryState 演进 + 快照，一次事务。
-            try {
-              await useTavernStore.getState().confirmNovelChapter(novelId, chapterId);
-            } catch (error) {
-              useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-                jobId,
-                kind: 'batch',
-                mode: 'continue',
-                status: 'failed',
-                lastError: error instanceof Error ? error.message : '确认入库失败',
-                updatedAt: nowIso(),
-              });
-              throw new Error(`第 ${chapter?.index ?? step + 1} 章确认入库失败：${error instanceof Error ? error.message : '未知错误'}`);
-            }
-
-            if (continuationSettings.autoAudit) {
-              await useTavernStore.getState().auditRewriteChapter(novelId, chapterId);
-              const latestNovel = useTavernStore.getState().novels.find((item) => item.id === novelId);
-              const latestAudit = getLatestChapterAudit(latestNovel?.novelRewriteAudits, chapterId);
-              if (getBatchAuditRisk(latestAudit) === 'high') {
-                const reason = `第 ${chapter?.index ?? step + 1} 章审核存在高风险，请处理后再继续。`;
-                const completed = step + 1;
-                useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-                  jobId, kind: 'batch', mode: 'continue', status: 'paused', progress: completed / generateCount,
-                  currentStep: '高风险审核，已暂停', lastError: reason, updatedAt: nowIso(),
-                });
-                options?.onProgress?.(completed, generateCount, chapter?.title);
-                return { completed, stopped: true, reason };
-              }
-            }
-
-            const progress = (step + 1) / generateCount;
-            useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-              jobId, kind: 'batch', mode: 'continue', status: 'running', progress,
-              currentStep: `已完成 ${step + 1}/${generateCount} 章`, updatedAt: nowIso(),
-            });
-            options?.onProgress?.(step + 1, generateCount, chapter?.title);
-          }
-
-          useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-            jobId,
-            kind: 'batch',
-            mode: 'continue',
-            status: 'completed',
-            progress: 1,
-            currentStep: '批量续写完成',
-            completedAt: nowIso(),
-            updatedAt: nowIso(),
-          });
-          return { completed: generateCount, stopped: false };
-        } catch (error) {
-          useTavernStore.getState().upsertNovelGenerationJob(novelId, {
-            jobId,
-            kind: 'batch',
-            mode: 'continue',
-            status: 'failed',
-            lastError: error instanceof Error ? error.message : '批量续写失败',
-            updatedAt: nowIso(),
-          });
-          throw error;
-        }
-      },
       analyzeNovelStoryState: async (novelId, options) => {
         const state = useTavernStore.getState();
         const novel = state.novels.find((item) => item.id === novelId);
@@ -5284,6 +5222,11 @@ export const useTavernStore = create<TavernStore>()(
           return { ran: false, paused: false };
         }
 
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
+          purpose: 'utility', task: 'analysis',
+        });
+        const completion = buildStoreCompletion(apiSettings);
+
         const lockOwner = acquireNovelWriteLock(novelId, 'analyze');
         if (!lockOwner) {
           // 若已有同类型的分析任务正在后台运行（例如切页后组件重挂载再次触发），
@@ -5299,10 +5242,6 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error('该小说正在执行其他状态任务，请稍后再试。');
         }
 
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
-        });
-        const completion = buildStoreCompletion(apiSettings);
         const jobId = makeId('job-analyze');
         const startedAt = nowIso();
 
@@ -5402,7 +5341,7 @@ export const useTavernStore = create<TavernStore>()(
           releaseNovelWriteLock(novelId, lockOwner);
         }
       },
-      syncNovelKnowledgeBase: (novelId) => {
+      syncNovelKnowledgeBase: (novelId, options) => {
         const state = useTavernStore.getState();
         const novel = state.novels.find((item) => item.id === novelId);
         if (!novel) {
@@ -5410,6 +5349,7 @@ export const useTavernStore = create<TavernStore>()(
         }
         const next = syncStoryAnalysisToKnowledgeBase(novel, {
           nsfwEnabled: true,
+          refreshGenerated: options?.refreshGenerated,
         });
         const timestamp = nowIso();
         set((s) => ({
@@ -5446,6 +5386,11 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error('请先完成状态分析，再增强角色档案。');
         }
 
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
+          purpose: 'utility', task: 'character',
+        });
+        const completion = buildStoreCompletion(apiSettings);
+
         const lockOwner = acquireNovelWriteLock(novelId, 'enrich');
         if (!lockOwner) {
           const alreadyRunning = useTavernStore
@@ -5458,10 +5403,6 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error('该小说正在执行其他状态任务，请稍后再试。');
         }
 
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
-        });
-        const completion = buildStoreCompletion(apiSettings);
         const jobId = makeId('job-enrich');
         const startedAt = nowIso();
         const nsfwEnabled = true;
@@ -5478,7 +5419,14 @@ export const useTavernStore = create<TavernStore>()(
         });
 
         try {
-          const finalChapters = getFinalChapters(novel);
+          await Promise.all(getFinalChapters(novel).map((chapter) =>
+            useTavernStore.getState().hydrateNovelChapterContent(chapter.id),
+          ));
+          const hydratedNovel = useTavernStore.getState().novels.find((item) => item.id === novelId) ?? novel;
+          const finalChapters = getFinalChapters(hydratedNovel);
+          if (finalChapters.some((chapter) => chapter.contentStatus === 'loading' || chapter.contentStatus === 'error')) {
+            throw new Error('正文尚未加载完成，请稍后再试。');
+          }
           const result = await enrichCharactersFromText({
             completion,
             novelName: novel.name,
@@ -5495,6 +5443,7 @@ export const useTavernStore = create<TavernStore>()(
             result.characters.map((character) => [character.id, character]),
           );
           const nextCharacters = analysis.characters.map((character) => {
+            if (character.lockedByUser || character.locked) return character;
             const delta = enrichedById.get(character.id);
             if (!delta) {
               return character;
@@ -5620,6 +5569,11 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error('小说不存在。');
         }
 
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
+          purpose: 'utility', task: 'outline',
+        });
+        const completion = buildStoreCompletion(apiSettings);
+
         const lockOwner = acquireNovelWriteLock(novelId, 'forecast');
         if (!lockOwner) {
           // 若已有推演任务正在后台运行，返回空 id（调用方忽略），避免切页回来后误报「失败」。
@@ -5645,10 +5599,6 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error('小说还没有正式章节，无法推演路线。');
         }
 
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
-        });
-        const completion = buildStoreCompletion(apiSettings);
         const jobId = makeId('job-forecast');
         const startedAt = nowIso();
 
@@ -5757,7 +5707,7 @@ export const useTavernStore = create<TavernStore>()(
         }
 
         const settings = resolveContinuationSettings(novel);
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings);
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, { task: 'writing' });
 
         if (!apiSettings.apiKey.trim()) {
           throw new Error('当前模型未配置 API Key，请先在系统设置中完善模型配置。');
@@ -5766,6 +5716,9 @@ export const useTavernStore = create<TavernStore>()(
         const resumeJob = options?.resumeJobId
           ? (novel.novelGenerationJobs ?? []).find((item) => item.jobId === options.resumeJobId)
           : undefined;
+        if (options?.resumeJobId && (!resumeJob || resumeJob.kind !== 'write')) {
+          throw new Error('只能恢复当前章节的写作任务。');
+        }
         const effectivePlanId = options?.planId ?? resumeJob?.planId;
         const effectiveBranchId = options?.branchId ?? resumeJob?.branchId;
         const plan = effectivePlanId
@@ -5792,10 +5745,22 @@ export const useTavernStore = create<TavernStore>()(
         const branchChapters = branch ? (branch.chapters ?? []) : [];
         const baseChapters = [...branchBase, ...branchChapters];
         const lastChapter = baseChapters[baseChapters.length - 1] ?? null;
-        const nextIndex = resumeJob?.chapterIndex ?? (lastChapter ? lastChapter.index + 1 : 1);
+        const nextIndex = options?.targetChapterIndex ?? resumeJob?.chapterIndex ?? (lastChapter ? lastChapter.index + 1 : 1);
 
         // 幂等生成：先清理与 nextIndex 相同的旧草稿（「重新生成」/ 失败重试会留下重复章节，
         // 旧版无此清理导致章节列表无限膨胀）。
+        const existingTargetDraft = (hydratedNovel.chapters ?? []).find(
+          (chapter) => chapter.status === 'draft' && chapter.index === nextIndex,
+        );
+        const existingTargetFinal = (hydratedNovel.chapters ?? []).find(
+          (chapter) => chapter.status === 'final' && chapter.index === nextIndex,
+        );
+        if (existingTargetFinal && !resumeJob) {
+          throw new Error(`第${nextIndex}章已经定稿，不能重复写入。`);
+        }
+        if (existingTargetDraft && !resumeJob && existingTargetDraft.content.trim()) {
+          throw new Error(`第${nextIndex}章已有未定稿草稿，请先处理后再重试。`);
+        }
         if (!resumeJob) set((s) => ({
           novels: s.novels.map((item) =>
             item.id === novelId
@@ -5816,10 +5781,17 @@ export const useTavernStore = create<TavernStore>()(
           mustKeep: '',
           mustAvoid: '',
         };
-        const instruction = options?.userInstruction?.trim() ?? resumeJob?.userInstruction ?? '';
+        const rawInstruction = options?.userInstruction?.trim() ?? resumeJob?.userInstruction ?? '';
+        const planning = normalizeChapterPlanning(options?.planning ?? resumeJob?.chapterPlanning);
         const outlineGoal = novel.outline?.volumes
           .flatMap((volume) => volume.chapters)
           .find((chapter) => chapter.index === nextIndex)?.goal ?? '';
+        const instruction = buildChapterInstruction(rawInstruction || outlineGoal, planning);
+        const targetWords = resolveChapterTargetWords(
+          options?.targetWords ?? resumeJob?.targetWords ?? existingTargetDraft?.targetWords,
+          rawInstruction || outlineGoal,
+          settings.targetWords,
+        );
 
         let activeProjectionFacts = hydratedNovel.novelStoryFacts ?? [];
         if (Platform.OS !== 'web') {
@@ -5857,14 +5829,14 @@ export const useTavernStore = create<TavernStore>()(
           throw new Error(`本章任务约束不可行：${missionBundle.feasibility.conflicts.join('；')}`);
         }
 
-        // 目标字数超过单段安全上限时，自动拆分为多段顺序生成（段与段衔接），
-        // 规避长文漂移 / 请求超时 / max_tokens 截断。
-        const resolvedSegments = resolveWriteSegments(settings.targetWords);
-        const segments = resumeJob?.totalSegments ?? resolvedSegments.segments;
-        const perSegmentWords = resolvedSegments.perSegmentWords;
+        // Request a complete chapter once. A short result pauses for an
+        // explicit same-chapter supplement; legacy checkpoints remain usable.
+        const segments = (resumeJob?.segmentIndex ?? 0) + 1;
 
         const context = buildRewriteContext({
           novelName: novel.name,
+          novelSystemPrompt: hydratedNovel.systemPrompt,
+          chapterIndex: nextIndex,
           characterContext: buildNovelCharacterContext(hydratedNovel, `第${nextIndex}章\n${instruction || outlineGoal}`, lastChapter?.content.slice(-1200) ?? ''),
           analysis: novel.novelStoryAnalysis ?? null,
           storyFacts: activeProjectionFacts,
@@ -5878,7 +5850,7 @@ export const useTavernStore = create<TavernStore>()(
             ? []
             : baseChapters.slice(-settings.lookbackChapters),
           userGuide,
-          targetWords: segments > 1 ? perSegmentWords : settings.targetWords,
+          targetWords,
           maxContextChars: settings.maxContextChars,
           apiSettings,
         });
@@ -5895,7 +5867,9 @@ export const useTavernStore = create<TavernStore>()(
           index: nextIndex,
           title: `第${nextIndex}章`,
           summary: '',
-          goal: instruction || outlineGoal,
+          goal: rawInstruction || outlineGoal,
+          planning,
+          targetWords,
           content: '',
           status: 'draft',
           aiGenerated: true,
@@ -5904,6 +5878,7 @@ export const useTavernStore = create<TavernStore>()(
         };
 
         if (!existingDraft) useTavernStore.getState().addNovelChapter(novelId, draft);
+        else if (existingDraft.targetWords !== targetWords) useTavernStore.getState().updateNovelChapter(novelId, draft.id, { targetWords });
 
         const jobId = resumeJob?.jobId ?? makeId('job-write');
         const startedAt = resumeJob?.startedAt ?? nowIso();
@@ -5913,13 +5888,11 @@ export const useTavernStore = create<TavernStore>()(
           mode: effectiveBranchId ? 'ending' : (plan?.mode ?? 'continue'),
           status: 'running',
           progress: (resumeJob?.segmentIndex ?? 0) / segments,
-          currentStep:
-            segments > 1
-              ? `起草第${nextIndex}章（共 ${segments} 段，第 1 段）`
-              : `起草第${nextIndex}章`,
+          currentStep: resumeJob ? `补写第${nextIndex}章` : `起草第${nextIndex}章`,
           startedAt,
           updatedAt: startedAt,
           chapterIndex: nextIndex,
+          ...(options?.targetChapterIndex !== undefined ? { targetChapterIndex: options.targetChapterIndex } : {}),
           chapterId: draft.id,
           segmentIndex: resumeJob?.segmentIndex ?? 0,
           totalSegments: segments,
@@ -5927,7 +5900,9 @@ export const useTavernStore = create<TavernStore>()(
           accumulatedContent: resumeJob?.accumulatedContent ?? existingDraft?.content ?? '',
           retryCount: resumeJob?.retryCount ?? 0,
           contextTokens: context.contextPack.contextManifest.estimatedTokens,
-          userInstruction: instruction,
+          userInstruction: rawInstruction,
+          chapterPlanning: planning,
+          targetWords,
           planId: effectivePlanId,
           branchId: effectiveBranchId,
         });
@@ -5961,14 +5936,7 @@ export const useTavernStore = create<TavernStore>()(
           for (let segment = (resumeJob?.segmentIndex ?? 0) + 1; segment <= segments; segment += 1) {
             streamedSegment = '';
             checkpointChars = 0;
-            const isLast = segment === segments;
-            const segmentWords = isLast
-              ? Math.max(200, settings.targetWords - accumulated.length)
-              : perSegmentWords;
-
-            const segmentInstruction = isLast
-              ? `【本章共分 ${segments} 段，当前为第 ${segment}/${segments} 段（最后一段）】只输出本段正文。为本章做自然收束（剧情小节或章节钩子），不要输出「本章完」等标注。`
-              : `【本章共分 ${segments} 段，当前为第 ${segment}/${segments} 段】只输出本段正文。本段不是末段：在情节推进到一个自然的停顿点处结束，结尾不要强行收尾，不要输出「本章完」等标注。`;
+            const segmentWords = Math.max(200, targetWords - countChapterWords(accumulated));
 
             let messages: { role: 'system' | 'user'; content: string }[];
             if (segment === 1 && !accumulated.trim()) {
@@ -5976,7 +5944,7 @@ export const useTavernStore = create<TavernStore>()(
                 { role: 'system', content: context.systemPrompt },
                 {
                   role: 'user',
-                  content: `${context.userPrompt}${instruction ? `\n\n【本章补充要求】${instruction}` : ''}\n\n${segmentInstruction} 目标约 ${segmentWords} 字。`,
+                  content: `${context.userPrompt}${instruction ? `\n\n【本章补充要求】${instruction}` : ''}\n\n请生成完整本章，目标约 ${targetWords} 字，最低 ${Math.ceil(targetWords * 0.9)} 字。`,
                 },
               ];
             } else {
@@ -5984,7 +5952,7 @@ export const useTavernStore = create<TavernStore>()(
                 { role: 'system', content: context.systemPrompt },
                 {
                   role: 'user',
-                  content: `以下是本章已写正文：\n\n${accumulated}\n\n${segmentInstruction} 请紧接上面的结尾继续写，不要重复已写内容，目标约 ${segmentWords} 字。${instruction ? `\n\n【本章补充要求】${instruction}` : ''}`,
+                  content: `以下是本章已写正文：\n\n${accumulated}\n\n【补写当前章】本章总目标 ${targetWords} 字，目前已有 ${countChapterWords(accumulated)} 字。遵循小说主提示词和作者要求的格式，承接已有情节补足当前章，不要重复已写内容或开始下一章，本次目标约 ${segmentWords} 字，并为本章自然收束。${instruction ? `\n\n【本章补充要求】${instruction}` : ''}`,
                 },
               ];
             }
@@ -6013,10 +5981,7 @@ export const useTavernStore = create<TavernStore>()(
               mode: effectiveBranchId ? 'ending' : (plan?.mode ?? 'continue'),
               status: 'running',
               progress: segment / segments,
-              currentStep:
-                segments > 1
-                  ? `起草第${nextIndex}章（共 ${segments} 段，第 ${Math.min(segment + 1, segments)} 段）`
-                  : `起草第${nextIndex}章`,
+              currentStep: `检查第${nextIndex}章字数`,
               updatedAt: nowIso(),
               chapterIndex: nextIndex,
               chapterId: draft.id,
@@ -6029,13 +5994,14 @@ export const useTavernStore = create<TavernStore>()(
             });
           }
 
+          assertChapterLength(accumulated, targetWords);
           useTavernStore.getState().upsertNovelGenerationJob(novelId, {
             jobId,
             kind: 'write',
             mode: effectiveBranchId ? 'ending' : (plan?.mode ?? 'continue'),
             status: 'completed',
             progress: 1,
-            currentStep: `第${nextIndex}章草稿完成`,
+            currentStep: `第${nextIndex}章草稿完成 · ${countChapterWords(accumulated)}/${targetWords} 字`,
             completedAt: nowIso(),
             updatedAt: nowIso(),
             modelId: latestTokens.modelId,
@@ -6069,6 +6035,8 @@ export const useTavernStore = create<TavernStore>()(
             kind: 'write',
             mode: effectiveBranchId ? 'ending' : (plan?.mode ?? 'continue'),
             status: 'paused',
+            progress: Math.min(0.99, countChapterWords(accumulated) / targetWords),
+            currentStep: checkChapterLength(accumulated, targetWords).passed ? '生成中断，可恢复' : '字数不足，待补写',
             lastError: error instanceof Error ? error.message : '生成中断',
             updatedAt: nowIso(),
             chapterIndex: nextIndex,
@@ -6082,8 +6050,17 @@ export const useTavernStore = create<TavernStore>()(
           throw error;
         }
       },
-      resumeNovelGenerationJob: async (novelId, jobId) =>
-        get().rewriteNovelNextChapter(novelId, { resumeJobId: jobId }),
+      resumeNovelGenerationJob: async (novelId, jobId) => {
+        const job = get().novels.find((item) => item.id === novelId)
+          ?.novelGenerationJobs?.find((item) => item.jobId === jobId);
+        if (!job) throw new Error('任务不存在。');
+        if (job.status !== 'paused' && job.status !== 'failed') throw new Error('只有暂停或失败的任务可以恢复。');
+        if (job.kind !== 'write') {
+          if (job.kind === 'batch') get().abandonNovelGenerationJob(novelId, jobId);
+          throw new Error(job.kind === 'batch' ? '批量写作已移除，请在章节页面逐章创作。' : '此任务不支持章节生成恢复。');
+        }
+        return get().rewriteNovelNextChapter(novelId, { resumeJobId: jobId });
+      },
       abandonNovelGenerationJob: (novelId, jobId) => {
         const job = get().novels.find((item) => item.id === novelId)
           ?.novelGenerationJobs?.find((item) => item.jobId === jobId);
@@ -6097,10 +6074,22 @@ export const useTavernStore = create<TavernStore>()(
         const job = get().novels.find((item) => item.id === novelId)
           ?.novelGenerationJobs?.find((item) => item.jobId === jobId);
         if (!job) throw new Error('任务不存在。');
+        if (job.status !== 'paused' && job.status !== 'failed') throw new Error('只有暂停或失败的任务可以重试。');
+        if (job.kind !== 'write') {
+          if (job.kind === 'batch') get().abandonNovelGenerationJob(novelId, jobId);
+          throw new Error(job.kind === 'batch' ? '批量写作已移除，请在章节页面逐章创作。' : '此任务不支持章节生成恢复。');
+        }
+        const retryDraft = job.chapterId
+          ? get().novels.find((item) => item.id === novelId)?.chapters?.find((item) => item.id === job.chapterId)
+          : undefined;
+        if (retryDraft?.content.trim()) {
+          throw new Error(`第${retryDraft.index}章已有未定稿草稿，请先处理后再重试。`);
+        }
         if (job.chapterId) get().deleteNovelChapter(novelId, job.chapterId);
         get().abandonNovelGenerationJob(novelId, jobId);
         return get().rewriteNovelNextChapter(novelId, {
           planId: job.planId, branchId: job.branchId, userInstruction: job.userInstruction,
+          planning: job.chapterPlanning, targetChapterIndex: job.targetChapterIndex, targetWords: job.targetWords,
         });
       },
       auditRewriteChapter: async (novelId, chapterId) => {
@@ -6114,6 +6103,7 @@ export const useTavernStore = create<TavernStore>()(
         if (!chapter) {
           throw new Error('章节不存在。');
         }
+        const sourceFingerprint = getNovelAuditSourceFingerprint(novel, chapter);
 
         const plan = (novel.novelContinuationPlans ?? [])[0] ?? null;
         const forecast = plan
@@ -6121,12 +6111,14 @@ export const useTavernStore = create<TavernStore>()(
           : null;
 
         const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
+          purpose: 'utility', task: 'review',
         });
         const completion = buildStoreCompletion(apiSettings);
         const result = await auditRewriteChapter({
           novelName: novel.name,
+          novelSystemPrompt: novel.systemPrompt,
           chapter,
+          characterContext: buildNovelCharacterContext(novel, `第${chapter.index}章\n${chapter.goal}`, chapter.content.slice(-1200)),
           analysis: novel.novelStoryAnalysis ?? null,
           plan,
           forecast,
@@ -6149,6 +6141,13 @@ export const useTavernStore = create<TavernStore>()(
           passed: result.passed,
           createdAt: nowIso(),
           modelId: result.modelId,
+          sourceFingerprint,
+          stale: (() => {
+            const latestNovel = useTavernStore.getState().novels.find((item) => item.id === novelId);
+            const latestChapter = latestNovel?.chapters?.find((item) => item.id === chapterId);
+            return !latestNovel || !latestChapter ||
+              getNovelAuditSourceFingerprint(latestNovel, latestChapter) !== sourceFingerprint;
+          })(),
         };
 
         useTavernStore
@@ -6178,7 +6177,9 @@ export const useTavernStore = create<TavernStore>()(
         if (!chapter || chapter.status !== 'draft') {
           throw new Error('只有草稿章节可以修订。');
         }
-        const audit = (novel.novelRewriteAudits ?? []).find((item) => item.chapterId === chapterId);
+        const audit = (novel.novelRewriteAudits ?? []).find((item) =>
+          isNovelRewriteAuditCurrent(item, chapterId, getNovelAuditSourceFingerprint(novel, chapter)),
+        );
         if (!audit) {
           throw new Error('请先审查本章，再使用 AI 修订。');
         }
@@ -6189,13 +6190,14 @@ export const useTavernStore = create<TavernStore>()(
           : null;
 
         const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
+          purpose: 'utility', task: 'review',
         });
         const completion = buildStoreCompletion(apiSettings);
 
         // 1) 修订（仅 local 问题；结构性默认跳过）。
         const revised = await reviseRewriteChapter({
           novelName: novel.name,
+          novelSystemPrompt: novel.systemPrompt,
           chapter,
           audit,
           completion,
@@ -6205,7 +6207,9 @@ export const useTavernStore = create<TavernStore>()(
         // 2) 修订后重新审查，避免“修一个问题引入新问题”。
         const reAudit = await auditRewriteChapter({
           novelName: novel.name,
+          novelSystemPrompt: novel.systemPrompt,
           chapter: { ...chapter, content: revised.content },
+          characterContext: buildNovelCharacterContext(novel, `第${chapter.index}章\n${chapter.goal}`, revised.content.slice(-1200)),
           analysis: novel.novelStoryAnalysis ?? null,
           plan,
           forecast,
@@ -6231,11 +6235,14 @@ export const useTavernStore = create<TavernStore>()(
         useTavernStore
           .getState()
           .recordNovelContinuationUsage(novelId, 'rewrite-revise', revised.tokens + reAudit.tokens);
-        const latestChapter = get().novels.find((item) => item.id === novelId)
-          ?.chapters?.find((item) => item.id === chapterId);
+        const latestNovel = get().novels.find((item) => item.id === novelId);
+        const latestChapter = latestNovel?.chapters?.find((item) => item.id === chapterId);
         if (!latestChapter || (['updatedAt', 'status', 'title', 'content', 'summary', 'goal'] as const)
           .some((key) => latestChapter[key] !== chapter[key])) {
           throw new Error('修订期间章节已被修改或删除，本次结果未覆盖你的内容。请重新审查后再修订。');
+        }
+        if (!latestNovel || getNovelAuditSourceFingerprint(latestNovel, latestChapter) !== getNovelAuditSourceFingerprint(novel, chapter)) {
+          throw new Error('修订期间作品设定或前文已变化，本次结果未覆盖原稿，请重新审查后再修订。');
         }
         if (!adopted) return { adopted: false, score: reAudit.score };
 
@@ -6250,6 +6257,11 @@ export const useTavernStore = create<TavernStore>()(
           passed: reAudit.passed,
           createdAt: timestamp,
           modelId: reAudit.modelId,
+          sourceFingerprint: getNovelAuditSourceFingerprint(
+            get().novels.find((item) => item.id === novelId) ?? novel,
+            { ...chapter, content: revised.content },
+          ),
+          stale: false,
         };
 
         set((s) => ({
@@ -6280,16 +6292,20 @@ export const useTavernStore = create<TavernStore>()(
         if (chapter.status !== 'draft') {
           throw new Error('只有草稿章节可以确认入库。');
         }
+        // Never promote a short generated draft to canon, even after its job
+        // was abandoned or an older quality audit had passed.
+        assertChapterLength(chapter.content, chapter.targetWords);
+
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
+          purpose: 'utility', task: 'analysis',
+        });
+        const completion = buildStoreCompletion(apiSettings);
 
         const lockOwner = acquireNovelWriteLock(novelId, 'confirm');
         if (!lockOwner) {
           throw new Error('该小说正在执行其他状态任务，请稍后再试。');
         }
 
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, {
-          purpose: 'utility',
-        });
-        const completion = buildStoreCompletion(apiSettings);
         const analysis = novel.novelStoryAnalysis ?? {
           stateVersion: 0,
           lastAnalyzedChapter: 0,
@@ -6478,6 +6494,7 @@ export const useTavernStore = create<TavernStore>()(
         if (!chapter || chapter.status !== 'draft') {
           throw new Error('草稿章节不存在或已确认。');
         }
+        assertChapterLength(chapter.content, chapter.targetWords);
 
         const lockOwner = acquireNovelWriteLock(novelId, 'confirm-branch');
         if (!lockOwner) {
@@ -6539,6 +6556,8 @@ export const useTavernStore = create<TavernStore>()(
           ...(job.completionTokens ? { completionTokens: job.completionTokens } : {}),
           ...(job.durationMs ? { durationMs: job.durationMs } : {}),
           ...(job.chapterIndex !== undefined ? { chapterIndex: job.chapterIndex } : {}),
+          ...(job.targetChapterIndex !== undefined ? { targetChapterIndex: job.targetChapterIndex } : {}),
+          ...(job.targetWords !== undefined ? { targetWords: job.targetWords } : {}),
           ...(job.chapterId !== undefined ? { chapterId: job.chapterId } : {}),
           ...(job.segmentIndex !== undefined ? { segmentIndex: job.segmentIndex } : {}),
           ...(job.totalSegments !== undefined ? { totalSegments: job.totalSegments } : {}),
@@ -6547,6 +6566,7 @@ export const useTavernStore = create<TavernStore>()(
           ...(job.retryCount !== undefined ? { retryCount: job.retryCount } : {}),
           ...(job.contextTokens !== undefined ? { contextTokens: job.contextTokens } : {}),
           ...(job.userInstruction !== undefined ? { userInstruction: job.userInstruction } : {}),
+          ...(job.chapterPlanning !== undefined ? { chapterPlanning: job.chapterPlanning } : {}),
           ...(job.planId !== undefined ? { planId: job.planId } : {}),
           ...(job.branchId !== undefined ? { branchId: job.branchId } : {}),
         };
@@ -6681,7 +6701,7 @@ export const useTavernStore = create<TavernStore>()(
           }
         }
 
-        const apiSettings = resolveApiSettings(state.providers, state.generationSettings);
+        const apiSettings = resolveApiSettings(state.providers, state.generationSettings, { task: 'character' });
         const framework = {
           playerName: novel.playerName,
           playerPersona: novel.playerPersona ?? '',
@@ -7537,7 +7557,7 @@ export const useTavernStore = create<TavernStore>()(
                   ...stateDocuments,
                   quickTravel: recoveredQuickTravel,
                   canonRevision: databaseCanonRevision,
-                  novelGenerationJobs: (stateDocuments.novelGenerationJobs ?? []).map((job) =>
+                  novelGenerationJobs: (stateDocuments.novelGenerationJobs ?? []).map(retireBatchGenerationJob).map((job) =>
                     job.status === 'running'
                       ? { ...job, status: 'paused' as const, lastError: '应用重启导致任务暂停，可继续剩余分段', updatedAt: nowIso() }
                       : job,
@@ -7575,6 +7595,21 @@ export const useTavernStore = create<TavernStore>()(
                       }
                     })(),
                     content: '',
+                    planning: (() => {
+                      try {
+                        return normalizeChapterPlanning(JSON.parse(chapter.jsonExtra).planning);
+                      } catch {
+                        return undefined;
+                      }
+                    })(),
+                    targetWords: (() => {
+                      try {
+                        const value: unknown = JSON.parse(chapter.jsonExtra).targetWords;
+                        return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+                      } catch {
+                        return undefined;
+                      }
+                    })(),
                     status: chapter.status === 'final' ? ('final' as const) : ('draft' as const),
                     createdAt: chapter.createdAt,
                     updatedAt: chapter.updatedAt,

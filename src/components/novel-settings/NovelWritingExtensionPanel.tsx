@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -40,6 +41,7 @@ function WritingExtensionTextPanel() {
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
         purpose: 'utility',
+        task: 'prompt',
       });
 
       if (
@@ -112,6 +114,7 @@ function WritingExtensionTextPanel() {
           },
         ]}
       />
+      <TaskModelSelector task="prompt" disabled={isPolishing} />
       <View style={styles.actions}>
         <Pressable
           disabled={isPolishing}

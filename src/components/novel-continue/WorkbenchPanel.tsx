@@ -16,10 +16,6 @@ type WorkbenchPanelProps = {
 export function WorkbenchPanel({ title, subtitle, children, action }: WorkbenchPanelProps) {
   const theme = useTheme();
 
-  if (title === '批量续写') {
-    return null;
-  }
-
   return (
     <View
       style={[

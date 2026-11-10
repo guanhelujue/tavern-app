@@ -37,7 +37,9 @@ import {
   normalizeCharacterWorkspace,
 } from '@/features/character-operations/model';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { createEmptyCastCharacter } from '@/services/novel-create-ai';
+import { formatKnowledgeSyncReport } from '@/services/novel-knowledge-sync';
 import { createEmptyStoryAnalysis } from '@/constants/novel-story-state';
 import { useTavernStore } from '@/store/tavern-store';
 import { mergeIntroForDisplay } from '@/utils/novel-intro';
@@ -46,6 +48,7 @@ import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
 import { resolveCharacterCardUiTheme } from '@/utils/character-card-ui-theme';
 import { castFromDossier, ensureNovelDossiers } from '@/utils/novel-dossiers';
 import { normalizePlayerProfileFields } from '@/utils/novel-player';
+import { readNovelBlueprint } from '@/features/novel-creation/legacy-novel-adapter';
 import { resolvePortraitDisplayUri } from '@/utils/character-card-portraits';
 import {
   detectPortraitFocus,
@@ -92,12 +95,15 @@ function resolveCastHeight(
 
 export default function NovelCharacterKnowledgeScreen() {
   const theme = useTheme();
+  const desktop = useDesktopLayout();
   const params = useLocalSearchParams();
   const novelId = Array.isArray(params.novelId) ? params.novelId[0] : params.novelId;
   const novels = useTavernStore((state) => state.novels);
   const motionEnabled = useTavernStore((state) => state.appearanceSettings.motionEnabled);
   const updateNovelCastCharacters = useTavernStore((state) => state.updateNovelCastCharacters);
   const updateNovel = useTavernStore((state) => state.updateNovel);
+  const syncNovelKnowledgeBase = useTavernStore((state) => state.syncNovelKnowledgeBase);
+  const enrichNovelCharacters = useTavernStore((state) => state.enrichNovelCharacters);
   const generateNovelSupportingCharacters = useTavernStore((state) => state.generateNovelSupportingCharacters);
   const updateNovelCharacterDossiers = useTavernStore(
     (state) => state.updateNovelCharacterDossiers,
@@ -123,6 +129,24 @@ export default function NovelCharacterKnowledgeScreen() {
     () => activeQuickWorld?.cast ?? novel?.cast ?? [],
     [activeQuickWorld, novel?.cast],
   );
+  const analyzedCharacters = novel?.novelStoryAnalysis?.characters ?? [];
+  const missingCharacterCount = new Set(
+    analyzedCharacters
+      .filter((character) => character.name.trim() && !cast.some(
+        (item) => item.name.trim().toLowerCase() === character.name.trim().toLowerCase(),
+      ))
+      .map((character) => character.name.trim().toLowerCase()),
+  ).size;
+  const runningJob = novel?.novelGenerationJobs?.find((job) => job.status === 'running');
+  const legacyProtagonistIdea = useMemo(() => {
+    if (!novel || cast.some((item) => item.isProtagonist === true)) {
+      return null;
+    }
+    const protagonist = readNovelBlueprint(novel).protagonist;
+    const identity = protagonist.identity.trim();
+    const desire = protagonist.desire.trim();
+    return identity || desire ? { identity, desire } : null;
+  }, [cast, novel]);
   const appearanceId = normalizeCharacterCardAppearanceId(
     novel?.characterCardAppearanceId ?? DEFAULT_CHARACTER_CARD_APPEARANCE_ID,
   );
@@ -139,6 +163,7 @@ export default function NovelCharacterKnowledgeScreen() {
   const [isAppearancePickerOpen, setIsAppearancePickerOpen] = useState(false);
   const [isOperationsOpen, setIsOperationsOpen] = useState(false);
   const [isInferringRelations, setIsInferringRelations] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
   const [visibleCharacterCount, setVisibleCharacterCount] = useState(30);
   const [editingDossier, setEditingDossier] = useState<NovelCharacterDossier | null>(null);
   const [editingCast, setEditingCast] = useState<NovelCastCharacter | null>(null);
@@ -281,6 +306,20 @@ export default function NovelCharacterKnowledgeScreen() {
     setIsModalOpen(true);
   }
 
+  function openLegacyProtagonistIdea() {
+    if (!legacyProtagonistIdea) {
+      return;
+    }
+    setEditingDossier(null);
+    setEditingCast({
+      ...createEmptyCastCharacter(),
+      profession: legacyProtagonistIdea.identity,
+      motive: legacyProtagonistIdea.desire,
+      isProtagonist: true,
+    });
+    setIsModalOpen(true);
+  }
+
   function openCandidate(candidate: NovelCastCharacter) {
     setIsOperationsOpen(false);
     setEditingDossier(null);
@@ -334,6 +373,25 @@ export default function NovelCharacterKnowledgeScreen() {
       );
     } finally {
       setIsInferringRelations(false);
+    }
+  }
+
+  function handleImportAnalysisCharacters() {
+    if (!novelId || runningJob || isEnriching) return;
+    const report = syncNovelKnowledgeBase(novelId, { refreshGenerated: false });
+    showAppAlert('已有分析已补入', formatKnowledgeSyncReport(report));
+  }
+
+  async function handleEnrichCharacters() {
+    if (!novelId || runningJob || isEnriching) return;
+    setIsEnriching(true);
+    try {
+      const result = await enrichNovelCharacters(novelId);
+      showAppAlert('正文资料整理完成', `已整理 ${result.enriched} 位人物的正文资料。自动提取的卡片已补全，手动保存的卡片保持不变。`);
+    } catch (error) {
+      showAppAlert('正文补全失败', error instanceof Error ? error.message : '请稍后重试。');
+    } finally {
+      setIsEnriching(false);
     }
   }
 
@@ -463,8 +521,8 @@ export default function NovelCharacterKnowledgeScreen() {
           }}
         />
 
-        <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
-          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <SafeAreaView style={[styles.safeArea, desktop && styles.safeAreaDesktop]} edges={['left', 'right', 'bottom']}>
+          <ScrollView contentContainerStyle={[styles.content, desktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
             <Animated.View
               style={[
                 styles.archiveHeroShell,
@@ -569,12 +627,76 @@ export default function NovelCharacterKnowledgeScreen() {
             </View>
           </Animated.View>
 
+            {!novel.quickTravel?.config.enabled && analyzedCharacters.length > 0 ? (
+              <View style={[styles.legacyIdeaCard, { backgroundColor: chrome.inputBackground, borderColor: chrome.border }]}>
+                <View style={styles.legacyIdeaCopy}>
+                  <Text style={[styles.legacyIdeaTitle, { color: chrome.text }]}>从正文完善人物</Text>
+                  <Text style={[styles.legacyIdeaText, { color: chrome.textMuted }]}>
+                    检索定稿正文，补全自动提取的人物卡。手动保存的卡片由你维护，重新分析不会覆盖。
+                    {missingCharacterCount > 0 ? ` 还有 ${missingCharacterCount} 位已分析人物未建卡，可直接补入。` : ''}
+                  </Text>
+                  {runningJob || isEnriching ? (
+                    <Text accessibilityLiveRegion="polite" style={[styles.legacyIdeaText, { color: chrome.accent }]}>
+                      {runningJob?.kind === 'enrich' || isEnriching ? '正在从正文补全人物…' : '当前写作任务完成后可补全人物。'}
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={styles.actionRow}>
+                  {missingCharacterCount > 0 ? (
+                    <Pressable
+                      onPress={handleImportAnalysisCharacters}
+                      disabled={Boolean(runningJob) || isEnriching}
+                      accessibilityRole="button"
+                      style={({ pressed }) => [styles.legacyIdeaButton, { borderColor: chrome.accent, opacity: runningJob || isEnriching ? 0.5 : 1 }, pressed && styles.pressed]}>
+                      <Text style={[styles.legacyIdeaButtonText, { color: chrome.accent }]}>补入已有分析人物</Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    onPress={() => void handleEnrichCharacters()}
+                    disabled={Boolean(runningJob) || isEnriching}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [styles.legacyIdeaButton, { borderColor: chrome.accent, opacity: runningJob || isEnriching ? 0.5 : 1 }, pressed && styles.pressed]}>
+                    <Text style={[styles.legacyIdeaButtonText, { color: chrome.accent }]}>从正文补全</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {legacyProtagonistIdea ? (
+              <View
+                style={[
+                  styles.legacyIdeaCard,
+                  { backgroundColor: chrome.inputBackground, borderColor: chrome.border },
+                ]}>
+                <View style={styles.legacyIdeaCopy}>
+                  <Text style={[styles.legacyIdeaEyebrow, { color: chrome.accent }]}>已有主角构思</Text>
+                  <Text style={[styles.legacyIdeaTitle, { color: chrome.text }]}>旧创作蓝图中保留了一份主角设定</Text>
+                  <Text style={[styles.legacyIdeaText, { color: chrome.textMuted }]}>
+                    {[legacyProtagonistIdea.identity, legacyProtagonistIdea.desire]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={openLegacyProtagonistIdea}
+                  style={({ pressed }) => [
+                    styles.legacyIdeaButton,
+                    { borderColor: chrome.accent, backgroundColor: chrome.background },
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="用这份构思创建主角">
+                  <Text style={[styles.legacyIdeaButtonText, { color: chrome.accent }]}>用这份构思创建主角</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
             {dossiers.length === 0 ? (
               <ThemedText type="small" themeColor="textMuted">
                 还没有角色。点上方「新建」；可勾选「是否主角」，支持男女双主角。
               </ThemedText>
             ) : (
-              <>
+              <View style={desktop ? styles.cardGrid : undefined}>
               {dossiers.slice(0, visibleCharacterCount).map((dossier, dossierIndex) => {
                 const linkedCast =
                   (dossier.castId
@@ -628,6 +750,7 @@ export default function NovelCharacterKnowledgeScreen() {
                 return (
                   <Swipeable
                     key={dossier.id}
+                    containerStyle={desktop ? styles.cardGridItem : undefined}
                     ref={(ref) => {
                       swipeableRefs.current[dossier.id] = ref;
                     }}
@@ -841,7 +964,7 @@ export default function NovelCharacterKnowledgeScreen() {
                   <ThemedText type="code" style={{ color: chrome.textMuted }}>尚有 {dossiers.length - visibleCharacterCount} 人未渲染；可在人物运营中直接搜索</ThemedText>
                 </Pressable>
               ) : null}
-              </>
+              </View>
             )}
           </ScrollView>
         </SafeAreaView>
@@ -986,7 +1109,11 @@ export default function NovelCharacterKnowledgeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
+  safeAreaDesktop: { maxWidth: 1600 },
   content: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
+  contentDesktop: { paddingHorizontal: Spacing.five, paddingTop: Spacing.five, gap: Spacing.four },
+  cardGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: Spacing.three },
+  cardGridItem: { flexBasis: 420, flexGrow: 1, minWidth: 0 },
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -1127,6 +1254,45 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
+  },
+  legacyIdeaCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: Spacing.three,
+    gap: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  legacyIdeaCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: 4,
+  },
+  legacyIdeaEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  legacyIdeaTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  legacyIdeaText: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  legacyIdeaButton: {
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: Spacing.three,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legacyIdeaButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
   },
   addButtonText: { color: '#120c09' },
   primaryActionContent: {

@@ -1,8 +1,10 @@
 import { Redirect, useLocalSearchParams } from 'expo-router';
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { NovelWorkbench } from '@/components/novel-continue/NovelWorkbench';
+import { NovelWorkbench, type WorkbenchTab } from '@/components/novel-continue/NovelWorkbench';
+
+const WORKBENCH_TABS: WorkbenchTab[] = ['chapters', 'tools', 'analysis', 'forecast', 'knowledge', 'consistency', 'settings', 'context'];
 
 export default function NovelWorkbenchScreen() {
   const params = useLocalSearchParams();
@@ -14,15 +16,25 @@ export default function NovelWorkbenchScreen() {
     return null;
   }
 
+  if (Platform.OS === 'web') {
+    if (focus === 'settings') return <Redirect href={`/novel/edit/${novelId}`} />;
+    if (focus === 'consistency') return <Redirect href={`/novel/chapters/${novelId}`} />;
+    if (focus === 'forecast') return <Redirect href={`/novel/world-outline/${novelId}`} />;
+  }
+
   if (focus === 'outline') {
     return <Redirect href={`/novel/world-outline/${novelId}`} />;
+  }
+
+  if ((!focus || focus === 'chapters') && autoAnalyze !== '1') {
+    return <Redirect href={`/novel/chapters/${novelId}`} />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <NovelWorkbench
         novelId={novelId}
-        initialTab={focus === 'analysis' || focus === 'outline' ? focus : 'chapters'}
+        initialTab={WORKBENCH_TABS.includes(focus as WorkbenchTab) ? focus as WorkbenchTab : 'chapters'}
         autoAnalyze={autoAnalyze === '1'}
       />
     </SafeAreaView>

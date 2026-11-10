@@ -4,6 +4,7 @@ import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleShee
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Markdown from 'react-native-markdown-display';
 import { Fonts } from '@/constants/theme';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { buildChatMarkdownStyles } from '@/utils/chat-markdown-styles';
 import { resolveApiSettings, useTavernStore } from '@/store/tavern-store';
 import { applyMemoryPatch, createPlanningSession, undoPlanningMemory, type PlanningSession, type PlanningItem } from './domain';
@@ -84,7 +85,7 @@ export default function PlanningScreen() {
   }
 
   function api() {
-    const apiSettings = resolveApiSettings(providers, settings, { purpose: 'utility' });
+    const apiSettings = resolveApiSettings(providers, settings, { task: 'outline', purpose: 'utility' });
     if (!apiSettings.apiKey.trim()) throw new Error('请先在系统设置中配置辅助模型或默认模型。');
     return apiSettings;
   }
@@ -227,6 +228,7 @@ export default function PlanningScreen() {
             <View style={styles.headerTitle}><PlanningText numberOfLines={1} style={styles.brand}>创作对话</PlanningText>{!compact ? <PlanningText numberOfLines={1} muted style={styles.caption}>{target?.title ?? '正在恢复对话'}</PlanningText> : null}</View>
           </View>
           <View style={styles.headerActions}>
+            <TaskModelSelector task="outline" disabled={disabled} />
             {preview ? <Pressable accessibilityRole="button" onPress={() => { setTab('preview'); setPanelOpen(true); }} style={styles.textButton}><PlanningText muted style={styles.caption}>草稿</PlanningText></Pressable> : null}
             <PlanningButton label="生成完整设定" onPress={generate} disabled={disabled || !session || Boolean(editing)} />
           </View>

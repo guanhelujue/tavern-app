@@ -31,6 +31,7 @@ export function ThemeBackdrop({ contained = false }: { contained?: boolean }) {
 
 const styles = StyleSheet.create({
   layer: {
+    overflow: 'hidden',
     position: 'absolute',
     top: 0,
     right: 0,

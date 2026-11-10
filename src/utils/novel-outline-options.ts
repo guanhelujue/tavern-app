@@ -4,6 +4,8 @@ import { NOVEL_TARGET_WORDS_RANGE } from '@/constants/novel-continuation';
 export type NovelOutlineGenerationOptions = {
   targetChapterCount?: number;
   targetWords?: number;
+  /** Explicit first chapter for a deliberate whole-book rebuild. */
+  startChapterIndex?: number;
   userBrief?: string;
 };
 
@@ -11,6 +13,13 @@ const MIN_OUTLINE_CHAPTERS = 1;
 const MAX_OUTLINE_CHAPTERS = 10_000;
 const MIN_OUTLINE_WORDS = 1_000;
 const MAX_OUTLINE_WORDS = NOVEL_TARGET_WORDS_RANGE[1] * MAX_OUTLINE_CHAPTERS;
+
+function normalizeStartChapterIndex(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(1, Math.trunc(value));
+}
 
 /** Derive the whole-outline word count from its two editable inputs. */
 export function calculateNovelOutlineTotalWords(
@@ -81,6 +90,7 @@ export function resolveNovelOutlineOptions(
     ? undefined
     : targetChapterCount * (novel.continuationSettings?.targetWords ?? 1_800);
   const targetWords = clampOutlineWords(overrides.targetWords ?? inheritedWords);
+  const startChapterIndex = normalizeStartChapterIndex(overrides.startChapterIndex);
   const userBrief = overrides.userBrief !== undefined
     ? overrides.userBrief.trim()
     : buildProjectBriefText(novel);
@@ -88,6 +98,7 @@ export function resolveNovelOutlineOptions(
   return {
     ...(targetChapterCount === undefined ? {} : { targetChapterCount }),
     ...(targetWords === undefined ? {} : { targetWords }),
+    ...(startChapterIndex === undefined ? {} : { startChapterIndex }),
     ...(userBrief ? { userBrief } : {}),
   };
 }
@@ -100,10 +111,12 @@ export function normalizeNovelOutlineOptions(
     ? undefined
     : clampNovelOutlineChapterCount(options.targetChapterCount);
   const targetWords = clampOutlineWords(options.targetWords);
+  const startChapterIndex = normalizeStartChapterIndex(options.startChapterIndex);
 
   return {
     ...(targetChapterCount === undefined ? {} : { targetChapterCount }),
     ...(targetWords === undefined ? {} : { targetWords }),
+    ...(startChapterIndex === undefined ? {} : { startChapterIndex }),
     ...(options.userBrief?.trim() ? { userBrief: options.userBrief.trim() } : {}),
   };
 }

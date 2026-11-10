@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NovelFormField } from '@/components/novel-create/NovelFormField';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -27,42 +28,21 @@ import { buildLegacyNovelInput } from './legacy-novel-adapter';
 function BlueprintField({
   blueprint,
   onEdit,
+  editable,
 }: {
   blueprint: StoryBlueprint;
   onEdit: (event: CreationEvent) => void;
+  editable: boolean;
 }) {
   const edit = (patch: Extract<CreationEvent, { type: 'edit-blueprint' }>['patch']) => {
     onEdit({ type: 'edit-blueprint', patch });
   };
 
   return (
-    <View style={styles.blueprintSections}>
-      <ThemedView type="surface" style={styles.sectionCard}>
-        <ThemedText type="code" themeColor="accent">01 · 故事核心</ThemedText>
-        <NovelFormField label="书名" required value={blueprint.title} placeholder="可以先用工作名" onChangeText={(title) => edit({ title })} />
-        <NovelFormField label="故事前提" required multiline minHeight={120} value={blueprint.premise} placeholder="谁，在什么处境下，为了什么必须开始行动？" onChangeText={(premise) => edit({ premise })} />
-      </ThemedView>
-
-      <ThemedView type="surface" style={styles.sectionCard}>
-        <ThemedText type="code" themeColor="accent">02 · 推动力</ThemedText>
-        <NovelFormField label="主角身份" value={blueprint.protagonist.identity} placeholder="只写故事层面的身份，不必现在完成角色卡" onChangeText={(identity) => edit({ protagonist: { identity } })} />
-        <NovelFormField label="主角最想得到什么" required multiline minHeight={96} value={blueprint.protagonist.desire} placeholder="能够持续推动整本书的欲望" onChangeText={(desire) => edit({ protagonist: { desire } })} />
-        <NovelFormField label="什么在阻止主角" required multiline minHeight={96} value={blueprint.protagonist.obstacle} placeholder="外部阻力、内部缺陷，或两者同时存在" onChangeText={(obstacle) => edit({ protagonist: { obstacle } })} />
-        <NovelFormField label="失败代价" multiline minHeight={88} value={blueprint.stakes} placeholder="如果失败，主角会失去什么？" onChangeText={(stakes) => edit({ stakes })} />
-      </ThemedView>
-
-      <ThemedView type="surface" style={styles.sectionCard}>
-        <ThemedText type="code" themeColor="accent">03 · 从哪里开始</ThemedText>
-        <NovelFormField label="世界与关键规则" multiline minHeight={110} value={blueprint.setting} placeholder="只写会影响故事的世界设定" onChangeText={(setting) => edit({ setting })} />
-        <NovelFormField label="开篇场景" required multiline minHeight={110} value={blueprint.opening} placeholder="第一章发生的具体事件，以及章末钩子" onChangeText={(opening) => edit({ opening })} />
-        <NovelFormField label="长期方向" multiline minHeight={96} value={blueprint.direction} placeholder="可选：大致发展或结局倾向" onChangeText={(direction) => edit({ direction })} />
-        <NovelFormField label="长篇故事引擎" required multiline minHeight={120} value={blueprint.longForm.engine} placeholder="解决当前问题后，什么机制会自然产生新的选择、代价和更高层阻力？" onChangeText={(engine) => edit({ longForm: { ...blueprint.longForm, engine } })} />
-        <NovelFormField label="阶段推进" required multiline minHeight={150} value={blueprint.longForm.arcs.join('\n')} placeholder={'至少三行，每行一个卷级阶段：目标、升级、不可逆转折\n第一阶段：……\n第二阶段：……\n第三阶段：……'} onChangeText={(value) => edit({ longForm: { ...blueprint.longForm, arcs: value.split('\n') } })} />
-        <NovelFormField label="长期悬念与副线" required multiline minHeight={130} value={blueprint.longForm.openThreads.join('\n')} placeholder={'至少三行，安排不同速度发展的悬念、关系线或副线'} onChangeText={(value) => edit({ longForm: { ...blueprint.longForm, openThreads: value.split('\n') } })} />
-        <NovelFormField label="叙事气质" value={blueprint.tone} placeholder="例如：克制、潮湿、黑色幽默、节奏明快" onChangeText={(tone) => edit({ tone })} />
-        <NovelFormField label="作者约束" multiline minHeight={96} value={blueprint.constraints.join('\n')} placeholder="可选，每行一条；例如：不要系统升级流" onChangeText={(value) => edit({ constraints: value.split('\n') })} />
-      </ThemedView>
-    </View>
+    <ThemedView type="surface" style={styles.sectionCard}>
+      <NovelFormField label="世界名称" required editable={editable} value={blueprint.title} placeholder="给这个世界起个名字，也可以先用暂定名" onChangeText={(title) => edit({ title })} />
+      <NovelFormField label="世界内容" required editable={editable} multiline minHeight={200} value={blueprint.setting} placeholder="写下这个世界的背景、规则，或你想写的一段故事。暂时想到多少，就写多少。" onChangeText={(setting) => edit({ setting })} />
+    </ThemedView>
   );
 }
 
@@ -81,7 +61,7 @@ export default function NewNovelCreationScreen() {
   const creation = useMemo(() => createNovelCreation({
     drafts: asyncStorageCreationDrafts,
     generateBlueprints: async (seed) => {
-      const apiSettings = resolveApiSettings(providers, generationSettings, { purpose: 'utility' });
+      const apiSettings = resolveApiSettings(providers, generationSettings, { task: 'creation', purpose: 'utility' });
       if (!apiSettings.apiKey.trim()) throw new Error('请先在系统设置中配置默认模型或辅助模型 Key。');
       return generateBlueprintProposals({
         apiSettings,
@@ -97,7 +77,10 @@ export default function NewNovelCreationScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    void creation.open().then((next) => {
+    void creation.open().then(async (opened) => {
+      const next = opened.step === 'seed'
+        ? await creation.transition(opened, { type: 'resume-blueprint' })
+        : opened;
       if (!active) return;
       sessionRef.current = next;
       setSession(next);
@@ -168,7 +151,7 @@ export default function NewNovelCreationScreen() {
       const latest = sessionRef.current;
       if (!latest) return;
       const novelId = await creation.commit(latest);
-      router.replace(`/novel/${novelId}` as Href);
+      router.replace(`/novel/workbench/${novelId}` as Href);
     } catch (error) {
       showAppAlert('还不能创建', error instanceof Error ? error.message : '创建小说失败。');
     } finally {
@@ -194,7 +177,7 @@ export default function NewNovelCreationScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
             <View style={styles.topBar}>
-              <Pressable onPress={() => {
+              <Pressable accessibilityRole="button" onPress={() => {
                 if (router.canGoBack()) router.back();
                 else router.replace('/(tabs)/novels' as Href);
               }} hitSlop={12}>
@@ -206,31 +189,14 @@ export default function NewNovelCreationScreen() {
             <View style={styles.hero}>
               <ThemedText type="code" themeColor="accent">NEW STORY</ThemedText>
               <ThemedText style={styles.title}>
-                {activeBlueprint ? '把故事说清楚，\n然后开始写。' : '先找到一个\n值得写的故事。'}
+                {activeBlueprint ? '从一个世界，开始写。' : '找一点灵感。'}
               </ThemedText>
               <ThemedText themeColor="textSecondary" style={styles.subtitle}>
                 {activeBlueprint
-                  ? '这里只保留会真正影响正文的创作蓝图。封面、模型、角色卡和大纲都可以进入项目后再设置。'
+                  ? '起个名字，写下世界内容，就可以开始。人物、冲突和剧情安排，之后在世界与大纲里慢慢完善。'
                   : '不需要先选模式。写下一句话、几个意象，或者完全留空，让 AI 给出三个能够持续展开的长篇方向。'}
               </ThemedText>
             </View>
-
-            <View style={styles.progressRow}>
-              {['想法', '选择', '蓝图'].map((label, index) => {
-                const active = (isSeed ? 0 : isIdeas ? 1 : 2) >= index;
-                return (
-                  <View key={label} style={styles.progressItem}>
-                    <View style={[styles.progressDot, { backgroundColor: active ? theme.accent : theme.border }]} />
-                    <ThemedText type="code" themeColor={active ? 'accent' : 'textMuted'}>{label}</ThemedText>
-                  </View>
-                );
-              })}
-            </View>
-
-            <Pressable disabled={busyAction !== null} onPress={() => { void openPlanning(); }} style={[styles.ideaCard, { borderColor: theme.border, backgroundColor: theme.surface }]}>
-              <ThemedText type="smallBold" themeColor="accent">进入创作对话 →</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">在独立对话台里慢慢完善想法，确定后再生成蓝图。构想与对话会自动保存。</ThemedText>
-            </Pressable>
 
             {session.error ? (
               <ThemedView type="surface" style={[styles.errorCard, { borderColor: theme.error }]}> 
@@ -249,6 +215,7 @@ export default function NewNovelCreationScreen() {
                   onChangeText={(seed) => { void send({ type: 'edit-seed', seed }); }}
                 />
                 <Pressable
+                  accessibilityRole="button"
                   disabled={busyAction !== null}
                   onPress={() => { void generateIdeas(); }}
                   style={({ pressed }) => [styles.primaryButton, { backgroundColor: theme.accent }, (pressed || busyAction) && styles.dimmed]}>
@@ -256,8 +223,9 @@ export default function NewNovelCreationScreen() {
                     {busyAction === 'ideas' ? '正在生成三个方向…' : '生成 3 个故事方案'}
                   </ThemedText>
                 </Pressable>
-                <Pressable onPress={() => { void send({ type: 'start-blank' }); }} style={styles.textButton}>
-                  <ThemedText type="smallBold" themeColor="textMuted">不使用 AI，直接填写蓝图</ThemedText>
+                <TaskModelSelector task="creation" disabled={busyAction !== null} />
+                <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void send({ type: 'resume-blueprint' }); }} style={styles.textButton}>
+                  <ThemedText type="smallBold" themeColor="textMuted">返回世界创建</ThemedText>
                 </Pressable>
               </ThemedView>
             ) : null}
@@ -283,30 +251,34 @@ export default function NewNovelCreationScreen() {
                       <ThemedText type="code" themeColor="textMuted">长篇引擎 · {idea.longForm.arcs.length} 个阶段</ThemedText>
                       <ThemedText type="small">{idea.longForm.engine}</ThemedText>
                     </View>
-                    <Pressable onPress={() => { void send({ type: 'choose-idea', id: idea.id }); }} style={[styles.chooseButton, { borderColor: theme.accent }]}>
+                    <Pressable accessibilityRole="button" onPress={() => { void send({ type: 'choose-idea', id: idea.id }); }} style={[styles.chooseButton, { borderColor: theme.accent }]}>
                       <ThemedText type="smallBold" themeColor="accent">选择这个方向 →</ThemedText>
                     </Pressable>
                   </ThemedView>
                 ))}
                 <View style={styles.rowActions}>
-                  <Pressable onPress={() => { void send({ type: 'back-to-seed' }); }} style={styles.textButton}>
+                  <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void send({ type: 'back-to-seed' }); }} style={styles.textButton}>
                     <ThemedText type="smallBold" themeColor="textMuted">修改想法</ThemedText>
                   </Pressable>
-                  <Pressable disabled={busyAction !== null} onPress={() => { void generateIdeas(); }} style={styles.textButton}>
+                  <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void generateIdeas(); }} style={styles.textButton}>
                     <ThemedText type="smallBold" themeColor="accent">换一批</ThemedText>
                   </Pressable>
                 </View>
+                <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void send({ type: 'resume-blueprint' }); }} style={styles.textButton}>
+                  <ThemedText type="smallBold" themeColor="textMuted">返回世界创建</ThemedText>
+                </Pressable>
               </View>
             ) : null}
 
             {activeBlueprint ? (
               <>
-                <BlueprintField blueprint={activeBlueprint} onEdit={(event) => { void send(event); }} />
+                <BlueprintField blueprint={activeBlueprint} editable={busyAction === null} onEdit={(event) => { void send(event); }} />
                 <View style={styles.finalActions}>
-                  <Pressable onPress={() => { void send({ type: 'back-to-seed' }); }} style={styles.textButton}>
-                    <ThemedText type="smallBold" themeColor="textMuted">重新找方向</ThemedText>
+                  <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void send({ type: 'back-to-seed' }); }} style={styles.textButton}>
+                    <ThemedText type="smallBold" themeColor="textMuted">让 AI 帮我构思</ThemedText>
                   </Pressable>
                   <Pressable
+                    accessibilityRole="button"
                     disabled={busyAction !== null}
                     onPress={() => { void commit(); }}
                     style={({ pressed }) => [styles.primaryButton, { flex: 1, backgroundColor: theme.accent }, (pressed || busyAction) && styles.dimmed]}>
@@ -315,6 +287,9 @@ export default function NewNovelCreationScreen() {
                     </ThemedText>
                   </Pressable>
                 </View>
+                <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void openPlanning(); }} style={styles.planningLink}>
+                  <ThemedText type="small" themeColor="textSecondary">还想聊聊想法？进入灵感对话 →</ThemedText>
+                </Pressable>
               </>
             ) : null}
           </ScrollView>
@@ -326,17 +301,14 @@ export default function NewNovelCreationScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center' },
-  safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth },
+  safeArea: { flex: 1, width: '100%', maxWidth: Math.min(MaxContentWidth, 880) },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   flex: { flex: 1 },
   content: { paddingHorizontal: Spacing.four, paddingTop: Spacing.three, paddingBottom: 72, gap: Spacing.four },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   hero: { gap: Spacing.two },
-  title: { fontSize: 40, lineHeight: 46, fontWeight: '700', letterSpacing: -1 },
+  title: { fontSize: 32, lineHeight: 42, fontWeight: '700', letterSpacing: -1 },
   subtitle: { lineHeight: 24, maxWidth: 540 },
-  progressRow: { flexDirection: 'row', gap: Spacing.three },
-  progressItem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
-  progressDot: { width: 7, height: 7, borderRadius: 4 },
   errorCard: { borderWidth: 1, borderRadius: 14, padding: Spacing.three },
   seedCard: { borderWidth: 1, borderRadius: 24, padding: Spacing.four, gap: Spacing.three },
   primaryButton: { minHeight: 54, borderRadius: 18, paddingHorizontal: Spacing.four, alignItems: 'center', justifyContent: 'center' },
@@ -349,7 +321,7 @@ const styles = StyleSheet.create({
   ideaFact: { gap: 4 },
   chooseButton: { minHeight: 48, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   rowActions: { flexDirection: 'row', justifyContent: 'space-between' },
-  blueprintSections: { gap: Spacing.three },
+  planningLink: { alignItems: 'center', padding: Spacing.two },
   sectionCard: { borderRadius: 22, padding: Spacing.four, gap: Spacing.three },
-  finalActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  finalActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Spacing.two },
 });

@@ -160,15 +160,29 @@ export function countOutlineChanges(
       continue;
     }
     const beforeChapters = new Map(previous.chapters.map((chapter) => [chapter.index, chapter]));
-    let volumeChanged = previous.title !== volume.title || previous.summary !== volume.summary;
+    let volumeChanged = previous.title !== volume.title
+      || previous.summary !== volume.summary
+      || previous.plannedChapterCount !== volume.plannedChapterCount
+      || previous.wordsPerChapter !== volume.wordsPerChapter
+      || previous.tone !== volume.tone
+      || previous.foreshadowing !== volume.foreshadowing
+      || previous.handoff?.incoming !== volume.handoff?.incoming
+      || previous.handoff?.outgoing !== volume.handoff?.outgoing
+      || JSON.stringify(previous.handoff?.unresolvedThreads ?? []) !== JSON.stringify(volume.handoff?.unresolvedThreads ?? []);
     for (const chapter of volume.chapters) {
       const oldChapter = beforeChapters.get(chapter.index);
       if (!oldChapter) {
         addedChapters += 1;
-      } else if (oldChapter.title !== chapter.title || oldChapter.goal !== chapter.goal || oldChapter.sceneEnd !== chapter.sceneEnd) {
+      } else if (oldChapter.title !== chapter.title || oldChapter.goal !== chapter.goal || oldChapter.sceneEnd !== chapter.sceneEnd
+        || oldChapter.characterChange !== chapter.characterChange
+        || oldChapter.foreshadowing !== chapter.foreshadowing
+        || oldChapter.endingHook !== chapter.endingHook) {
         changedChapters += 1;
       }
-      if (!oldChapter || oldChapter.title !== chapter.title || oldChapter.goal !== chapter.goal || oldChapter.sceneEnd !== chapter.sceneEnd) {
+      if (!oldChapter || oldChapter.title !== chapter.title || oldChapter.goal !== chapter.goal || oldChapter.sceneEnd !== chapter.sceneEnd
+        || oldChapter.characterChange !== chapter.characterChange
+        || oldChapter.foreshadowing !== chapter.foreshadowing
+        || oldChapter.endingHook !== chapter.endingHook) {
         volumeChanged = true;
       }
     }

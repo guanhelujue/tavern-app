@@ -44,7 +44,7 @@ export function buildCharacterPortraitAnalysisSystemPrompt(
   target: CharacterPortraitAnalysisTarget = 'public',
 ) {
   if (target === 'private') {
-    return `你是小说角色私密档案的视觉取证员。用户会提供一张明确成年虚构角色的私密参考图、当前草稿和世界设定。
+    return `你是小说角色私密档案的视觉取证员。用户会提供一张虚构角色的私密参考图、当前草稿和世界设定。
 
 只处理 dossierV2.private：从图片记录可见的稳定私密身体特征；无法从静态图片直接看出的敏感区域、身体反应、经验、偏好与习惯，只能结合当前人设作自洽的虚构推演，并在 fieldEvidence 中标为 inferred。不得修改 cast 或 dossierV2.public，不得把姿势、动作、临时状态、摄影风格或光线写成稳定身体特征，不得识别现实人物。
 
@@ -64,7 +64,7 @@ export function buildCharacterPortraitAnalysisSystemPrompt(
   }
 }
 
-内容模式：NSFW。只生成成年虚构角色的稳定私密档案，不写正在发生的性行为场景。
+内容模式：NSFW。只生成虚构角色的稳定私密档案，不写正在发生的性行为场景。
 ${CHARACTER_PRIVATE_DOSSIER_SCHEMA}
 ${buildNsfwCharacterCreatePrompt(true)}`;
   }
@@ -206,13 +206,6 @@ function fill(current: string | null | undefined, generated: unknown) {
   return current?.trim() || asString(generated);
 }
 
-function isExplicitlyAdult(age?: string | null) {
-  const value = age?.trim() ?? '';
-  if (/成年/.test(value)) return true;
-  const match = value.match(/\d+/);
-  return Boolean(match && Number.parseInt(match[0], 10) >= 18);
-}
-
 function mergeVisibleCharacter(
   current: NovelCastCharacter,
   payload: PortraitAnalysisPayload,
@@ -298,9 +291,6 @@ export async function analyzeCharacterPortrait({
   if (target === 'private' && !nsfwEnabled) {
     throw new Error('私密照识图仅在 NSFW 模式开启时可用。');
   }
-  if (target === 'private' && !isExplicitlyAdult(current.age)) {
-    throw new Error('私密照识图只处理年龄字段明确为 18 岁以上的虚构角色。');
-  }
   const image = await readNovelImageAsInlineData(imageUri);
   const model = apiSettings.model.trim();
   const protocol = apiSettings.protocol
@@ -331,7 +321,7 @@ export async function analyzeCharacterPortrait({
     })}`,
     userInstruction?.trim() ? `作者补充：${userInstruction.trim()}` : '',
     target === 'private'
-      ? '请按系统规则读取私密图片，只补全这一个成年虚构角色的私密档案。'
+      ? '请按系统规则读取私密图片，只补全这一个虚构角色的私密档案。'
       : '请按系统规则读取日常图片，只补全这一个虚构角色的公开档案。',
   ].filter(Boolean).join('\n\n');
 

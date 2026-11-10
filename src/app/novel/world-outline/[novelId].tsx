@@ -4,9 +4,13 @@ import { ActivityIndicator, Animated, Pressable, ScrollView, StyleSheet, TextInp
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
+import { OutlineWorkspace } from '@/features/outline-workspace/OutlineWorkspace';
+import { NovelStoryPlanningPanel } from '@/components/novel-create/NovelStoryPlanningPanel';
 import { NOVEL_TARGET_WORDS_RANGE } from '@/constants/novel-continuation';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import {
   generateNovelOutlineChapterRevision,
   generateNovelOutlineVolume,
@@ -20,7 +24,9 @@ import {
   clampNovelOutlineChapterCount,
 } from '@/utils/novel-outline-options';
 import { countOutlineChanges } from '@/utils/novel-outline-proposals';
+import { buildLegacyVolumeSeeds, mergeLegacyStoryIntoSummary } from '@/utils/novel-outline-seeds';
 import { buildQuickTravelContext, ensureQuickTravelArchive } from '@/utils/quick-travel';
+import { readNovelBlueprint } from '@/features/novel-creation/legacy-novel-adapter';
 
 type VolumeDraft = {
   id: string;
@@ -49,8 +55,8 @@ function outlineOperationLabel(operation: OutlineOperation | 'reshape'): string 
 type OutlineDiffItem = {
   kind: '新增' | '修改' | '删除';
   index: number;
-  before?: { title: string; goal: string };
-  after?: { title: string; goal: string };
+  before?: { title: string; goal: string; sceneEnd?: boolean };
+  after?: { title: string; goal: string; sceneEnd?: boolean };
 };
 
 function buildVolumeDiff(
@@ -64,19 +70,19 @@ function buildVolumeDiff(
   for (const chapter of after.chapters) {
     const previous = beforeByIndex.get(chapter.index);
     if (!previous) {
-      result.push({ kind: '新增', index: chapter.index, after: { title: chapter.title, goal: chapter.goal } });
+      result.push({ kind: '新增', index: chapter.index, after: { title: chapter.title, goal: chapter.goal, sceneEnd: chapter.sceneEnd } });
     } else if (previous.title !== chapter.title || previous.goal !== chapter.goal || previous.sceneEnd !== chapter.sceneEnd) {
       result.push({
         kind: '修改',
         index: chapter.index,
-        before: { title: previous.title, goal: previous.goal },
-        after: { title: chapter.title, goal: chapter.goal },
+        before: { title: previous.title, goal: previous.goal, sceneEnd: previous.sceneEnd },
+        after: { title: chapter.title, goal: chapter.goal, sceneEnd: chapter.sceneEnd },
       });
     }
   }
   for (const chapter of before?.chapters ?? []) {
     if (!afterByIndex.has(chapter.index)) {
-      result.push({ kind: '删除', index: chapter.index, before: { title: chapter.title, goal: chapter.goal } });
+      result.push({ kind: '删除', index: chapter.index, before: { title: chapter.title, goal: chapter.goal, sceneEnd: chapter.sceneEnd } });
     }
   }
   return result;
@@ -200,7 +206,7 @@ function getOutlineBaseChapterIndex(outline: NovelOutline | undefined, novel: No
     .flatMap((volume) => volume.chapters)
     .sort((a, b) => a.index - b.index)[0];
   const persistedBase = outline?.baseChapterIndex ?? firstPlannedChapter?.index;
-  return Math.max(persistedBase ?? 1, getNextChapterIndex(novel));
+  return persistedBase ?? getNextChapterIndex(novel);
 }
 
 function reindexOutline(outline: NovelOutline, baseChapterIndex: number): NovelOutline {
@@ -266,6 +272,7 @@ export default function WorldOutlineScreen() {
   const worldId = Array.isArray(rawWorldId) ? rawWorldId[0] : rawWorldId;
   const theme = useTheme();
   const { width } = useWindowDimensions();
+  const desktop = useDesktopLayout();
   const isCompact = width < 700;
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const providers = useTavernStore((state) => state.providers);
@@ -285,8 +292,15 @@ export default function WorldOutlineScreen() {
   const [workspaceStep, setWorkspaceStep] = useState<OutlineWorkspaceStep>('book');
   const [wholeBookMode, setWholeBookMode] = useState<'guided' | 'auto'>('guided');
   const [wholeBookPrompt, setWholeBookPrompt] = useState('');
+  const [storyPhase, setStoryPhase] = useState<'development' | 'climax' | 'resolution'>('development');
   const [wholeBookChapterCount, setWholeBookChapterCount] = useState('12');
   const [wholeBookWordsPerChapter, setWholeBookWordsPerChapter] = useState('1800');
+  const [wholeBookStartChapter, setWholeBookStartChapter] = useState(() => {
+    const firstPlanned = novel?.outline?.volumes
+      .flatMap((volume) => volume.chapters)
+      .sort((a, b) => a.index - b.index)[0]?.index;
+    return String(novel?.outline?.baseChapterIndex ?? firstPlanned ?? (novel ? getNextChapterIndex(novel) : 1));
+  });
   const [generatingWholeBook, setGeneratingWholeBook] = useState(false);
   const [selectedVolumeId, setSelectedVolumeId] = useState<string | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<VolumeDraft | null>(null);
@@ -304,6 +318,7 @@ export default function WorldOutlineScreen() {
   const [showVolumeSettings, setShowVolumeSettings] = useState(false);
   const [showVolumeAi, setShowVolumeAi] = useState(false);
   const [showHandoff, setShowHandoff] = useState(false);
+  const [showLegacyIdeas, setShowLegacyIdeas] = useState(false);
   const [pageReveal] = useState(() => new Animated.Value(motionEnabled ? 0 : 1));
 
   useEffect(() => {
@@ -422,7 +437,50 @@ export default function WorldOutlineScreen() {
   const currentNovel = novel;
   const currentArchive = archive!;
   const currentWorld = world;
+  const legacyBlueprint = readNovelBlueprint(currentNovel);
+  const hasLegacyIdeas = !isWorldScope && Boolean(
+    legacyBlueprint.premise || legacyBlueprint.direction || legacyBlueprint.opening
+      || legacyBlueprint.longForm.engine || legacyBlueprint.longForm.arcs.length
+      || legacyBlueprint.protagonist.obstacle || legacyBlueprint.stakes,
+  );
 
+  function persistOutline(nextOutline: NovelOutline) {
+    const normalized = reindexOutline(nextOutline, getOutlineBaseChapterIndex(nextOutline, currentNovel));
+    saveNovelOutlineAtScope(currentNovel.id, scopeId, normalized, '手动编辑大纲');
+  }
+
+  function importLegacySummary() {
+    persistOutline({
+      ...(outline ?? { summary: '', volumes: [], updatedAt: new Date().toISOString() }),
+      summary: mergeLegacyStoryIntoSummary(bookSummary, legacyBlueprint),
+      updatedAt: new Date().toISOString(),
+    });
+    setBookSummaryDraft(null);
+    setShowLegacyIdeas(false);
+  }
+
+  function importLegacyVolumes() {
+    const seeds = buildLegacyVolumeSeeds(outline, legacyBlueprint, scopeId);
+    if (!seeds.length) {
+      showAppAlert('没有新的阶段构思', '阶段构思已经并入分卷，或当前没有可导入的阶段。');
+      return;
+    }
+    persistOutline({
+      ...(outline ?? { summary: '', volumes: [], updatedAt: new Date().toISOString() }),
+      volumes: [...volumes, ...seeds],
+      updatedAt: new Date().toISOString(),
+    });
+    setShowLegacyIdeas(false);
+  }
+
+  const legacyIdeasPanel = hasLegacyIdeas ? <View style={[styles.legacyIdeasPanel, { borderColor: theme.border, backgroundColor: theme.surface }]}>
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: showLegacyIdeas }} onPress={() => setShowLegacyIdeas((current) => !current)} style={styles.desktopPanelHeading}><View><ThemedText type="smallBold">已有故事构思</ThemedText><ThemedText type="small" themeColor="textMuted">旧数据仍保留，可按需并入主线或分卷。</ThemedText></View><ThemedText type="code" themeColor="accent">{showLegacyIdeas ? '收起 ↑' : '展开 ↓'}</ThemedText></Pressable>
+    {showLegacyIdeas ? <><ThemedText type="small" themeColor="textMuted">{[legacyBlueprint.premise, legacyBlueprint.direction, legacyBlueprint.opening, legacyBlueprint.longForm.engine, legacyBlueprint.protagonist.obstacle, legacyBlueprint.stakes].filter(Boolean).join(' · ')}</ThemedText>{legacyBlueprint.longForm.arcs.length ? <ThemedText type="small" themeColor="textMuted">阶段构思：{legacyBlueprint.longForm.arcs.join(' / ')}</ThemedText> : null}<View style={styles.desktopInlineActions}><Pressable accessibilityRole="button" onPress={importLegacySummary} style={[styles.desktopSmallButton, { borderColor: theme.border }]}><ThemedText type="smallBold">并入全书主线</ThemedText></Pressable>{legacyBlueprint.longForm.arcs.length ? <Pressable accessibilityRole="button" onPress={importLegacyVolumes} style={[styles.desktopSmallButton, { borderColor: theme.border }]}><ThemedText type="smallBold">将阶段构思整理为分卷</ThemedText></Pressable> : null}</View></> : null}
+  </View> : null;
+
+  if (desktop) {
+    return <><Stack.Screen options={{ headerShown: false }} /><OutlineWorkspace key={`${currentNovel.id}-${scopeId}`} novelId={currentNovel.id} worldId={isWorldScope ? currentWorld?.id : undefined} /></>;
+  }
   function selectOutlineOperation(nextOperation: OutlineOperation) {
     setOutlineOperation(nextOperation);
     setOperationMenuOpen(false);
@@ -455,11 +513,6 @@ export default function WorldOutlineScreen() {
     });
   }
 
-  function persistOutline(nextOutline: NovelOutline) {
-    const normalized = reindexOutline(nextOutline, getOutlineBaseChapterIndex(nextOutline, currentNovel));
-    saveNovelOutlineAtScope(currentNovel.id, scopeId, normalized, '手动编辑大纲');
-  }
-
   function saveBookSummary() {
     persistOutline(outline
       ? { ...outline, summary: bookSummary.trim() }
@@ -480,13 +533,16 @@ export default function WorldOutlineScreen() {
       NOVEL_TARGET_WORDS_RANGE[0],
       Math.min(NOVEL_TARGET_WORDS_RANGE[1], Number.parseInt(wholeBookWordsPerChapter, 10) || 1800),
     );
+    const startChapterIndex = Math.max(1, Number.parseInt(wholeBookStartChapter, 10) || 1);
     setGeneratingWholeBook(true);
     try {
       await generateNovelOutline(currentNovel.id, {
         targetChapterCount: chapterCount,
         targetWords: chapterCount * wordsPerChapter,
+        startChapterIndex,
         userBrief: [
           wholeBookMode === 'guided' ? wholeBookPrompt.trim() : '',
+          `当前发展阶段：${storyPhase === 'development' ? '发展' : storyPhase === 'climax' ? '高潮' : '收束'}`,
           bookSummary.trim() ? `全书设定：${bookSummary.trim()}` : '',
         ].filter(Boolean).join('\n'),
       });
@@ -575,7 +631,7 @@ export default function WorldOutlineScreen() {
         ? { ...currentNovel, quickTravel: { ...currentArchive, activeWorldId: currentWorld.id } }
         : currentNovel;
       const result = await generateNovelOutlineVolume({
-        apiSettings: resolveApiSettings(providers, generationSettings, { purpose: 'utility' }),
+        apiSettings: resolveApiSettings(providers, generationSettings, { purpose: 'utility', task: 'outline' }),
         novel: scopedNovel,
         nextChapterIndex,
         analysis: null,
@@ -589,6 +645,7 @@ export default function WorldOutlineScreen() {
             : operation === 'revise'
               ? '操作边界：修改整卷结构；可以根据剧情需要新增、合并、删除或改写章节，最终章数由内容决定，但必须保留未被作者指令否定的核心冲突与人物动机。'
               : '',
+          `当前发展阶段：${storyPhase === 'development' ? '发展' : storyPhase === 'climax' ? '高潮' : '收束'}`,
         ]
           .filter(Boolean)
           .join('\n'),
@@ -790,7 +847,7 @@ export default function WorldOutlineScreen() {
         ? { ...currentNovel, quickTravel: { ...currentArchive, activeWorldId: currentWorld.id } }
         : currentNovel;
       const result = await generateNovelOutlineChapterRevision({
-        apiSettings: resolveApiSettings(providers, generationSettings, { purpose: 'utility' }),
+        apiSettings: resolveApiSettings(providers, generationSettings, { purpose: 'utility', task: 'outline' }),
         novel: scopedNovel,
         volume: activeVolume,
         chapterIndex,
@@ -963,6 +1020,9 @@ export default function WorldOutlineScreen() {
           <Animated.View pointerEvents="none" style={[styles.signalLine, { backgroundColor: theme.accent, transform: [{ scaleX: pageReveal }] }]} />
         </View>
 
+        {!isWorldScope ? <NovelStoryPlanningPanel key={currentNovel.id} novel={currentNovel} /> : null}
+        {legacyIdeasPanel}
+
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.stepRail, isCompact && styles.stepRailCompact]}>
           {stepTabs}
         </ScrollView>
@@ -983,6 +1043,7 @@ export default function WorldOutlineScreen() {
           <View style={[styles.cardHeader, isCompact && styles.cardHeaderCompact]}>
             <View style={styles.titleCopy}>
               <ThemedText type="subtitle">生成全书提案</ThemedText>
+              <TaskModelSelector task="outline" disabled={generatingWholeBook} />
               <ThemedText type="small" themeColor="textMuted">这是整本书级别的操作。适合第一次搭建或明确要重做整体结构时使用。</ThemedText>
             </View>
             <ThemedText type="code" themeColor="accent">只生成候选</ThemedText>
@@ -997,10 +1058,11 @@ export default function WorldOutlineScreen() {
               </Pressable>
             ))}
           </View>
-          {wholeBookMode === 'guided' ? <TextInput value={wholeBookPrompt} onChangeText={setWholeBookPrompt} multiline placeholder="写清主线、结局方向、角色关系和不能改动的设定" placeholderTextColor={theme.textMuted} style={[styles.input, styles.brief, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /> : null}
+          {wholeBookMode === 'guided' ? <><ThemedText type="smallBold">接下来的故事方向</ThemedText><TextInput accessibilityLabel="接下来的故事方向" value={wholeBookPrompt} onChangeText={setWholeBookPrompt} multiline placeholder="写清主线、结局方向、角色关系和不能改动的设定" placeholderTextColor={theme.textMuted} style={[styles.input, styles.brief, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /><View style={styles.phaseRow}>{([['development', '发展'], ['climax', '高潮'], ['resolution', '收束']] as const).map(([value, label]) => <Pressable key={value} accessibilityRole="button" onPress={() => setStoryPhase(value)} style={[styles.phaseButton, { borderColor: storyPhase === value ? theme.accent : theme.border, backgroundColor: storyPhase === value ? theme.accentMuted : theme.background }]}><ThemedText type="smallBold" themeColor={storyPhase === value ? 'accent' : 'textMuted'}>{label}</ThemedText></Pressable>)}</View></> : null}
             <View style={[styles.numberRow, isCompact && styles.numberRowCompact]}>
-            <View style={[styles.fieldGroup, isCompact && styles.fieldGroupCompact]}><ThemedText type="small" themeColor="textMuted">规划章节数</ThemedText><TextInput value={wholeBookChapterCount} onChangeText={setWholeBookChapterCount} keyboardType="number-pad" style={[styles.input, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /></View>
-            <View style={[styles.fieldGroup, isCompact && styles.fieldGroupCompact]}><ThemedText type="small" themeColor="textMuted">每章字数</ThemedText><TextInput value={wholeBookWordsPerChapter} onChangeText={setWholeBookWordsPerChapter} keyboardType="number-pad" style={[styles.input, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /></View>
+            <View style={[styles.fieldGroup, isCompact && styles.fieldGroupCompact]}><ThemedText type="small" themeColor="textMuted">规划章节数</ThemedText><TextInput accessibilityLabel="规划章节数" value={wholeBookChapterCount} onChangeText={setWholeBookChapterCount} keyboardType="number-pad" style={[styles.input, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /></View>
+            <View style={[styles.fieldGroup, isCompact && styles.fieldGroupCompact]}><ThemedText type="small" themeColor="textMuted">每章字数</ThemedText><TextInput accessibilityLabel="每章字数" value={wholeBookWordsPerChapter} onChangeText={setWholeBookWordsPerChapter} keyboardType="number-pad" style={[styles.input, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /></View>
+            <View style={[styles.fieldGroup, isCompact && styles.fieldGroupCompact]}><ThemedText type="small" themeColor="textMuted">起始章号</ThemedText><TextInput accessibilityLabel="起始章号" value={wholeBookStartChapter} onChangeText={setWholeBookStartChapter} keyboardType="number-pad" style={[styles.input, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]} /></View>
           </View>
           <Pressable disabled={generatingWholeBook} onPress={() => void requestGenerateWholeBook()} style={[styles.primaryButton, { backgroundColor: theme.accent, opacity: generatingWholeBook ? 0.55 : 1 }, isCompact && styles.fullWidthButton]}>
             {generatingWholeBook ? <ActivityIndicator color={theme.onPrimary} /> : null}
@@ -1394,4 +1456,41 @@ const styles = StyleSheet.create({
   inlineInput: { minHeight: 38, paddingVertical: Spacing.one, borderBottomWidth: StyleSheet.hairlineWidth },
   goalInput: { minHeight: 64, textAlignVertical: 'top' },
   historyRowCompact: { flexDirection: 'column', alignItems: 'stretch' },
+  desktopContent: { width: '100%', maxWidth: 1680, alignSelf: 'center', padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
+  desktopHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: Spacing.four, paddingBottom: Spacing.two, borderBottomWidth: StyleSheet.hairlineWidth },
+  desktopHeaderCopy: { flex: 1, gap: Spacing.one },
+  desktopStats: { flexDirection: 'row', gap: Spacing.three, paddingTop: Spacing.one },
+  desktopWorkspace: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three },
+  desktopWorkspaceNarrow: { flexWrap: 'wrap' },
+  desktopRail: { width: 270, gap: Spacing.three },
+  desktopMain: { flex: 1, minWidth: 0, gap: Spacing.three },
+  desktopAside: { width: 320, gap: Spacing.three },
+  desktopAsideNarrow: { width: '100%' },
+  desktopPanel: { borderWidth: 1, borderColor: '#00000020', borderRadius: 10, padding: Spacing.three, gap: Spacing.two, backgroundColor: '#FFFFFF08' },
+  desktopPanelHeading: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: Spacing.two },
+  desktopInlineActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  desktopSmallButton: { minHeight: 36, borderWidth: 1, borderRadius: 8, paddingHorizontal: Spacing.two, alignItems: 'center', justifyContent: 'center' },
+  desktopTextarea: { minHeight: 92, borderWidth: 1, borderRadius: 8, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two, textAlignVertical: 'top' },
+  desktopInput: { minHeight: 42, borderWidth: 1, borderRadius: 8, paddingHorizontal: Spacing.two },
+  desktopWideInput: { flex: 1, minWidth: 180 },
+  desktopFormGrid: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, flexWrap: 'wrap' },
+  desktopVolumeItem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderWidth: 1, borderRadius: 8, padding: Spacing.two },
+  desktopVolumeIndex: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  desktopVolumeCopy: { flex: 1, minWidth: 0, gap: 2 },
+  desktopChapterList: { gap: Spacing.one },
+  desktopChapterWrap: { gap: Spacing.one },
+  desktopReorderRow: { flexDirection: 'row', gap: Spacing.one, paddingLeft: Spacing.four },
+  desktopChapterItem: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderWidth: 1, borderRadius: 8, padding: Spacing.two },
+  desktopChapterNumber: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  desktopChapterCopy: { flex: 1, minWidth: 0, gap: 3 },
+  desktopChapterDetails: { flexDirection: 'row', gap: Spacing.two, flexWrap: 'wrap' },
+  desktopDetailBlock: { flex: 1, minWidth: 170, gap: Spacing.one, padding: Spacing.two, borderLeftWidth: 2 },
+  desktopEmpty: { borderWidth: 1, borderStyle: 'dashed', borderColor: '#00000020', borderRadius: 8, padding: Spacing.three, gap: Spacing.one, alignItems: 'flex-start' },
+  desktopAiForm: { borderWidth: 1, borderRadius: 8, padding: Spacing.two, gap: Spacing.two },
+  desktopEditForm: { gap: Spacing.two },
+  desktopDiffList: { gap: Spacing.one },
+  phaseRow: { flexDirection: 'row', gap: Spacing.one, flexWrap: 'wrap' },
+  phaseButton: { minHeight: 38, borderWidth: 1, borderRadius: 8, paddingHorizontal: Spacing.two, alignItems: 'center', justifyContent: 'center' },
+  legacyIdeasPanel: { borderWidth: 1, borderRadius: 10, padding: Spacing.three, gap: Spacing.two },
+  desktopHistoryRow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: Spacing.one, gap: 2 },
 });

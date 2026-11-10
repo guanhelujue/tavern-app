@@ -360,6 +360,7 @@ export type ContentStyleSettings = {
 /** Wire protocols supported by the independent image-generation client. */
 export type ImageProviderProtocol =
   | 'auto'
+  | 'comfyui'
   | 'google-generate-content'
   | 'openai-compatible'
   | 'openai-images'
@@ -422,9 +423,11 @@ export type GenerationSettings = {
    * Empty = fall back to the selected background model.
    */
   collaborationModelId: string;
+  /** Independent model routes for each AI surface. Empty entries follow the purpose lane. */
+  taskModelBindings?: Partial<Record<AiTaskId, AgentModelBinding>>;
   /**
    * @deprecated Kept only so older persisted settings can be migrated. New code
-   * should use the three shared model lanes instead of per-agent bindings.
+   * should use taskModelBindings for function-specific model choices.
    */
   agentModelBindings?: Partial<Record<NovelAgentId, AgentModelBinding>>;
   contextWindowMessages: number;
@@ -451,6 +454,11 @@ export type NovelAgentId =
   | 'narrator'
   | 'editor'
   | 'memory';
+
+export type AiTaskId =
+  | 'writing' | 'inspiration' | 'creation' | 'character' | 'outline'
+  | 'world' | 'review' | 'analysis' | 'memory' | 'style' | 'prompt'
+  | 'comic' | 'chat';
 
 /** Provider/model selection for one novel workflow agent. */
 export type AgentModelBinding = {
@@ -737,6 +745,14 @@ export type ConfirmNovelChapterResult = {
   warnings: string[];
 };
 
+/** Optional author planning, separate from the chapter prompt and body. */
+export type NovelChapterPlanning = {
+  conflict: string;
+  keyEvents: string;
+  participants: string;
+  scene: string;
+};
+
 /** A structured chapter of imported / generated novel body text. */
 export type NovelChapter = {
   id: string;
@@ -747,6 +763,9 @@ export type NovelChapter = {
   summary: string;
   /** Optional goal / next-scene directive used by the writing pipeline. */
   goal: string;
+  planning?: NovelChapterPlanning;
+  /** Requested body length; generated chapters must reach at least 90%. */
+  targetWords?: number;
   /** Chapter body text. */
   content: string;
   /** SQLite-backed body hydration state; metadata can stay resident without the body. */
@@ -864,6 +883,10 @@ export type NovelChapterAudit = {
   passed: boolean;
   createdAt: ISODateString;
   modelId?: string;
+  /** Fingerprint of chapter plus writing-impacting inputs audited. */
+  sourceFingerprint?: string;
+  /** Historical marker; stale reports remain visible but cannot gate writing. */
+  stale?: boolean;
 };
 
 /** One planned chapter inside a volume. */
@@ -873,6 +896,12 @@ export type NovelVolumeChapter = {
   goal: string;
   /** Explicit narrative scene boundary emitted by the outline planner. */
   sceneEnd?: boolean;
+  /** Optional author-facing character movement for this chapter. */
+  characterChange?: string;
+  /** Optional clue or foreshadowing boundary for this chapter. */
+  foreshadowing?: string;
+  /** Optional handoff/hook into the next chapter. */
+  endingHook?: string;
 };
 
 /** Lifecycle state for a user-built outline volume. */
@@ -890,6 +919,10 @@ export type NovelVolumePlan = {
   id: string;
   title: string;
   summary: string;
+  /** Optional author-defined cadence/tone for this volume. */
+  tone?: string;
+  /** Optional boundary for clues revealed in this volume. */
+  foreshadowing?: string;
   chapters: NovelVolumeChapter[];
   /** User-configured target for this volume; absent on legacy outlines. */
   plannedChapterCount?: number;
@@ -1053,6 +1086,14 @@ export type NovelCreationBlueprint = {
     identity: string;
     goal: string;
   };
+  /** Optional planning material filled in later from the world-outline editor. */
+  planning?: {
+    obstacle: string;
+    stakes: string;
+    engine: string;
+    arcs: string[];
+    openThreads: string[];
+  };
   /** Optional seed consumed by the existing quick-travel system/world generators. */
   runtimeSeed?: {
     systemName: string;
@@ -1082,9 +1123,8 @@ export type NovelProjectBrief = {
 };
 
 /**
- * Novel creation workflow. `interactive` is the ordinary Narrator chat path
- * (the persisted name is kept for compatibility); `workbench` is reserved for
- * continuation/project setup.
+ * All novels use the workbench. `interactive` is accepted only when reading
+ * older backups and is normalized to `workbench` by the store.
  */
 export type NovelCreationMode = 'interactive' | 'workbench';
 
@@ -1548,6 +1588,7 @@ export type NovelContinuationBranch = {
 /** 耗时任务记录（可取消 / 重试 / 恢复）。 */
 export type NovelGenerationJob = {
   jobId: string;
+  /** batch is retained only to recognize retired jobs from older saved data. */
   kind: 'analyze' | 'forecast' | 'write' | 'batch' | 'outline' | 'extract' | 'extract-style' | 'enrich';
   mode: 'continue' | 'ending';
   status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
@@ -1558,6 +1599,10 @@ export type NovelGenerationJob = {
   /** 恢复 checkpoint（analyze 任务记录已分析章节）。 */
   resumeAt?: number;
   chapterIndex?: number;
+  /** Legacy batch endpoint, or an explicitly selected chapter. */
+  targetChapterIndex?: number;
+  /** Persist the current chapter's requested length across pause/resume. */
+  targetWords?: number;
   chapterId?: string;
   segmentIndex?: number;
   totalSegments?: number;
@@ -1566,6 +1611,7 @@ export type NovelGenerationJob = {
   retryCount?: number;
   contextTokens?: number;
   userInstruction?: string;
+  chapterPlanning?: NovelChapterPlanning;
   planId?: string;
   branchId?: string;
   startedAt: ISODateString;
@@ -1614,6 +1660,8 @@ export type NovelRewriteAudit = {
   passed: boolean;
   createdAt: ISODateString;
   modelId?: string;
+  sourceFingerprint?: string;
+  stale?: boolean;
 };
 
 export type Novel = {
@@ -1791,11 +1839,11 @@ export type Novel = {
   novelRewriteAudits?: NovelRewriteAudit[];
   /** Incomplete novel kept on the shelf for later editing. */
   isDraft: boolean;
-  /** Wizard step to restore when continuing a draft (1–3). */
+  /** Legacy wizard progress, retained when reading older backups. */
   createStep: 1 | 2 | 3;
   /**
-   * 续写工程标记：由「续写小说」导入创建的小说。
-   * 书架点开后直接进入续写工作台；普通新建小说进大详情页。
+   * Legacy import-source metadata. Retained for backups only;
+   * all novels open in the same workspace regardless of source.
    */
   isContinuationProject?: boolean;
   /** Full quick-travel archive. Absent on legacy single-world novels. */

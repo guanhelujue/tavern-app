@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedText } from '@/components/themed-text';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
 import { Spacing } from '@/constants/theme';
@@ -22,7 +23,13 @@ export function NovelModPanel() {
   const settings = useTavernStore((state) => state.contentStyleSettings);
   const providers = useTavernStore((state) => state.providers);
   const generationSettings = useTavernStore((state) => state.generationSettings);
-  const extractionModel = resolveApiSettings(providers, generationSettings, { purpose: 'utility' });
+  const extractionModel = (() => {
+    try {
+      return resolveApiSettings(providers, generationSettings, { purpose: 'utility', task: 'style' });
+    } catch {
+      return null;
+    }
+  })();
   const updateSettings = useTavernStore((state) => state.updateContentStyleSettings);
   const { modLibrary, modExtractionPrompt } = normalizeWritingModSettings(settings);
   const [mode, setMode] = useState<'edit' | 'extract' | null>(null);
@@ -107,7 +114,13 @@ export function NovelModPanel() {
   async function extract() {
     if (request.current || importLock.current || !samples.length) return;
     const state = useTavernStore.getState();
-    const apiSettings = resolveApiSettings(state.providers, state.generationSettings, { purpose: 'utility' });
+    let apiSettings;
+    try {
+      apiSettings = resolveApiSettings(state.providers, state.generationSettings, { purpose: 'utility', task: 'style' });
+    } catch (error) {
+      showAppAlert('当前模型未配置', error instanceof Error ? error.message : '请先为文风功能选择可用模型。');
+      return;
+    }
     if (!apiSettings.apiKey.trim()) {
       showAppAlert('未配置 API Key', '请先在系统设置中配置后台模型或其跟随的写作模型的 API Key。');
       return;
@@ -191,7 +204,8 @@ export function NovelModPanel() {
               </> : null}
               {mode === 'extract' ? <>
                 <ThemedText type="small" themeColor="textMuted">可粘贴文章，并逐篇导入最多 5 个 txt 文件。全文一次发送，不抽样、不截取；结果先预览，保存后进入 MOD 列表。</ThemedText>
-                <ThemedText type="smallBold">当前提取模型：{extractionModel.model || '未配置'}</ThemedText>
+                <TaskModelSelector task="style" disabled={busy || importing} />
+                <ThemedText type="smallBold">当前提取模型：{extractionModel?.model || '未配置'}</ThemedText>
                 <ThemedText type="small" themeColor="textMuted">在「系统设置 → 后台模型」切换比较模型；未单独设置时跟随写作模型。</ThemedText>
                 <TextInput accessibilityLabel="文章样本" value={sampleText} onChangeText={setSampleText} editable={!busy && !importing}
                   multiline textAlignVertical="top" placeholder="粘贴文章正文；多篇可用标题分隔……" placeholderTextColor={theme.textMuted}

@@ -258,10 +258,16 @@ class PartialStreamError extends Error {
   }
 }
 
+class ModelRefusalError extends Error {
+  constructor(reason: string) {
+    super(reason ? `模型拒绝了这次请求。\n${reason}` : '模型拒绝了这次请求。');
+  }
+}
+
 function isRetryableError(error: unknown) {
   // A retry would mix already-displayed text from one attempt with another,
   // then replace the whole bubble with only the last attempt's response.
-  if (error instanceof PartialStreamError) return false;
+  if (error instanceof PartialStreamError || error instanceof ModelRefusalError) return false;
   if (!(error instanceof Error)) {
     return false;
   }
@@ -286,8 +292,8 @@ function isRetryableError(error: unknown) {
 function formatEmptyResponseError(finishReason?: string) {
   const reason = finishReason?.trim();
 
-  if (!reason) {
-    return '模型没有返回内容。可尝试调高回复长度上限、开关流式输出，或换一个模型。';
+  if (!reason || reason.toLowerCase() === 'stop') {
+    return '服务未返回正文。';
   }
 
   if (isTruncationFinishReason(reason)) {
@@ -439,10 +445,20 @@ type TokenUsage = {
   completionTokens?: number;
 };
 
+type AssistantContentPart = { type?: string; text?: string; refusal?: string };
+
+function refusalFromParts(parts: AssistantContentPart[]): string | undefined {
+  const refusals = parts.filter((part) => part?.type === 'refusal');
+  if (!refusals.length) return undefined;
+  return refusals.map((part) => typeof part.refusal === 'string' ? part.refusal.trim() : '')
+    .filter(Boolean).join('\n');
+}
+
 type ChatCompletionResponse = {
   choices?: {
     message?: {
-      content?: string | { type?: string; text?: string }[];
+      content?: string | AssistantContentPart[] | null;
+      refusal?: string | null;
       reasoning_content?: string;
       reasoning?: string;
     };
@@ -459,7 +475,7 @@ type ChatCompletionResponse = {
 };
 
 function extractAssistantText(payload: {
-  message?: { content?: string | { type?: string; text?: string }[] };
+  message?: { content?: string | AssistantContentPart[] | null };
   text?: string;
   delta?: { content?: string | null; text?: string };
 }): string {
@@ -1209,11 +1225,8 @@ async function executeChatCompletionRequest({
     }
 
     const responseText = await response.text();
-    const native = protocol === 'anthropic-messages'
-      ? parseAnthropicResponse(responseText)
-      : protocol === 'openai-responses'
-        ? parseResponsesResponse(responseText)
-        : undefined;
+    const responses = protocol === 'openai-responses' ? parseResponsesResponse(responseText) : undefined;
+    const native = protocol === 'anthropic-messages' ? parseAnthropicResponse(responseText) : responses;
     const data = native ? undefined : parseChatCompletionResponse(responseText);
     const finishReason = native?.finishReason ?? data?.choices?.[0]?.finish_reason;
 
@@ -1243,9 +1256,13 @@ async function executeChatCompletionRequest({
     ).trim();
 
     if (!content) {
-      const error = new Error(
-        `${formatEmptyResponseError(finishReason)}若关闭了流式输出，请确认当前模型支持非流式回复，或重新开启流式。`,
-      );
+      const message = data?.choices?.[0]?.message;
+      const messageRefusal = typeof message?.refusal === 'string' ? message.refusal.trim() : '';
+      const partRefusal = Array.isArray(message?.content) ? refusalFromParts(message.content) : undefined;
+      const refusal = responses?.refusal ?? (messageRefusal || partRefusal);
+      const error = refusal !== undefined
+        ? new ModelRefusalError(refusal)
+        : new Error(formatEmptyResponseError(finishReason));
 
       if (apiSettings.debugPromptInspectorEnabled) {
         recordSnapshot({
@@ -2168,6 +2185,7 @@ function parseAnthropicResponse(responseText: string): {
 
 function parseResponsesResponse(responseText: string): {
   content: string;
+  refusal?: string;
   reasoningContent?: string;
   usage: TokenUsage;
   finishReason?: string;
@@ -2183,11 +2201,11 @@ function parseResponsesResponse(responseText: string): {
   const error = data.error as { message?: string } | undefined;
   const outputText = typeof data.output_text === 'string' ? data.output_text : '';
   const output = Array.isArray(data.output) ? data.output : [];
-  const content = outputText || output
-    .flatMap((item) => {
-      const row = item as { content?: { type?: string; text?: string }[] };
-      return row.content ?? [];
-    })
+  const parts = output.flatMap((item) => {
+    const row = item as { content?: AssistantContentPart[] };
+    return Array.isArray(row?.content) ? row.content : [];
+  });
+  const content = outputText || parts
     .filter((part) => part.type === 'output_text' || part.type === 'text')
     .map((part) => part.text ?? '')
     .join('');
@@ -2209,6 +2227,7 @@ function parseResponsesResponse(responseText: string): {
   const status = typeof data.status === 'string' ? data.status : undefined;
   return {
     content,
+    refusal: refusalFromParts(parts),
     reasoningContent: reasoningContent || undefined,
     usage: {
       promptTokens: usage?.input_tokens,

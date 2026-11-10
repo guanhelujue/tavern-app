@@ -18,11 +18,13 @@ import { NovelImagePickerField } from '@/components/NovelImagePickerField';
 import { NovelVideoPickerField } from '@/components/NovelVideoPickerField';
 import { QuickTravelWorldDraftEditor } from '@/components/QuickTravelWorldDraftEditor';
 import { NovelCastEditor } from '@/components/novel-create/NovelCastEditor';
+import { DesktopNovelSettings } from '@/components/desktop/DesktopNovelSettings';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { DEFAULT_CHARACTER_CARD_APPEARANCE_ID } from '@/constants/character-card-appearances';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { useTavernStore } from '@/store/tavern-store';
 import type { NovelCastCharacter, WorldPack } from '@/types/tavern';
 import { DEFAULT_CHAT_BACKGROUND_OPACITY, isNovelVideoUri } from '@/utils/novel-images';
@@ -41,7 +43,7 @@ import {
   ensureQuickTravelArchive,
 } from '@/utils/quick-travel';
 
-export default function EditNovelScreen() {
+function LegacyEditNovelScreen() {
   const theme = useTheme();
   const navigation = useNavigation();
   const params = useLocalSearchParams();
@@ -525,6 +527,17 @@ export default function EditNovelScreen() {
 
     </ThemedView>
   );
+}
+
+export default function EditNovelScreen() {
+  const desktop = useDesktopLayout();
+  const params = useLocalSearchParams();
+  const novelId = Array.isArray(params.novelId) ? params.novelId[0] : params.novelId;
+  const advanced = params.advanced === '1';
+  if (desktop && !advanced) {
+    return <DesktopNovelSettings key={novelId} novelId={novelId} />;
+  }
+  return <LegacyEditNovelScreen />;
 }
 
 type FormSectionProps = {

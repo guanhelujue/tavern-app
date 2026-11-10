@@ -13,14 +13,14 @@ import { Image } from 'expo-image';
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
 import { AppPageHeader } from '@/components/ui/AppPageHeader';
 import { ModelRoutePicker } from '@/components/ModelRoutePicker';
+import { LocalComfyServiceControl } from '@/components/LocalComfyServiceControl';
 import { DraftTextInput } from '@/components/ui/DraftTextInput';
 import { providerLogoSource } from '@/constants/provider-logos';
 import {
   DEFAULT_IMAGE_BASE_URL,
-  IMAGE_MODEL_CATALOG,
-  imageModelCatalogEntry,
+  DEFAULT_IMAGE_MODEL,
 } from '@/constants/image-models';
-import { modelCapabilities, modelIdsEqual } from '@/constants/provider-capabilities';
+import { buildImageModelPresetCatalog, buildImageModelRouteCatalog, imageModelDisplayName } from '@/utils/image-model-route-catalog';
 import { PROVIDER_CATALOG } from '@/constants/providers';
 import {
   OptionsModal,
@@ -39,15 +39,11 @@ import {
 } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { getActiveProvider, useTavernStore } from '@/store/tavern-store';
-import type {
-  ImageProviderAuth,
-  ImageProviderProtocol,
-  LlmProvider,
-  ProviderModelSettings,
-} from '@/types/tavern';
+import type { ImageProviderProtocol, LlmProvider } from '@/types/tavern';
 import { pickExportDirectory } from '@/utils/chat-session-io';
 import { discoverProviderModels } from '@/services/provider-model-discovery';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
+import { AppAboutPanel } from '@/components/settings/AppAboutPanel';
 
 export default function SettingsScreen() {
   const theme = useTheme();
@@ -62,11 +58,8 @@ export default function SettingsScreen() {
     providerSecretsWarning,
     removeProvider,
     removeImageProvider,
-    setActiveProvider,
     setProviderApiKey,
     setProviderFetchedModels,
-    setProviderSelectedModel,
-    updateProviderModelSettings,
     updateAppearanceSettings,
     updateExportSettings,
     updateGenerationSettings,
@@ -79,14 +72,13 @@ export default function SettingsScreen() {
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [fetchMessage, setFetchMessage] = useState('');
   const [isProviderPickerOpen, setIsProviderPickerOpen] = useState(false);
-  const [isWritingModelPickerOpen, setIsWritingModelPickerOpen] = useState(false);
-  const [isCollaborationModelPickerOpen, setIsCollaborationModelPickerOpen] = useState(false);
-  const [isBackgroundModelPickerOpen, setIsBackgroundModelPickerOpen] = useState(false);
-  const [isThinkingParameterPickerOpen, setIsThinkingParameterPickerOpen] = useState(false);
   const [isImageProviderPickerOpen, setIsImageProviderPickerOpen] = useState(false);
   const [isImageModelPickerOpen, setIsImageModelPickerOpen] = useState(false);
+  const [isDefaultImageModelPickerOpen, setIsDefaultImageModelPickerOpen] = useState(false);
+  const [editingImageProviderId, setEditingImageProviderId] = useState('');
+  const [isImageConnectionTypePickerOpen, setIsImageConnectionTypePickerOpen] = useState(false);
   const [isImageProtocolPickerOpen, setIsImageProtocolPickerOpen] = useState(false);
-  const [isImageAuthPickerOpen, setIsImageAuthPickerOpen] = useState(false);
+  const [imageConnectionMessage, setImageConnectionMessage] = useState('');
   const [isCatalogPickerOpen, setIsCatalogPickerOpen] = useState(false);
   const [isSchemePickerOpen, setIsSchemePickerOpen] = useState(false);
 
@@ -101,25 +93,19 @@ export default function SettingsScreen() {
 
   const activeProvider = useMemo(() => getActiveProvider(providers), [providers]);
   const imageProviderList = useMemo(
-    () => Object.values(imageGenerationSettings.providers).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    ),
+    () => Object.values(imageGenerationSettings.providers)
+      .sort((left, right) => left.name.localeCompare(right.name)),
     [imageGenerationSettings.providers],
   );
-  const imageProvider = imageGenerationSettings.providerId
+  const defaultImageProvider = imageGenerationSettings.providerId
     ? imageGenerationSettings.providers[imageGenerationSettings.providerId]
     : undefined;
-  const imageModelOptions = IMAGE_MODEL_CATALOG;
-  const utilityProvider =
-    (generationSettings.utilityProviderId
-      ? providers[generationSettings.utilityProviderId]
-      : undefined) ?? activeProvider;
-  const collaborationProvider =
-    (generationSettings.collaborationProviderId
-      ? providers[generationSettings.collaborationProviderId]
-      : undefined) ?? activeProvider;
-  const hasRoutedModels = providerList.some((provider) =>
-    provider.fetchedModelsSource === 'remote' && provider.fetchedModels.length > 0);
+  const imageProvider = imageGenerationSettings.providers[editingImageProviderId] ?? defaultImageProvider ?? imageProviderList[0];
+  const imageModelCatalog = useMemo(() => buildImageModelRouteCatalog(
+    imageGenerationSettings.providers, imageGenerationSettings.providerId,
+  ), [imageGenerationSettings.providers, imageGenerationSettings.providerId]);
+  const imageModelPresets = useMemo(() => imageProvider ? buildImageModelPresetCatalog(imageProvider) : [], [imageProvider]);
+  const isLocalImageConnection = imageProvider?.protocol === 'comfyui';
   useEffect(() => {
     if (!providerList.length) {
       const timer = setTimeout(() => setEditingProviderId(''), 0);
@@ -139,15 +125,6 @@ export default function SettingsScreen() {
 
   const editingProvider = providers[editingProviderId] ?? activeProvider ?? providerList[0];
   const editingProviderLogo = editingProvider ? providerLogoSource(editingProvider.id) : undefined;
-  const writingModelCapability = activeProvider
-    ? modelCapabilities(activeProvider.id, activeProvider.selectedModel)
-    : undefined;
-  const writingModelPreference = activeProvider?.selectedModel
-    ? Object.entries(activeProvider.modelSettings ?? {}).find(([modelId]) =>
-        modelIdsEqual(modelId, activeProvider.selectedModel),
-      )?.[1]
-    : undefined;
-
   const exportLocationLabel = exportSettings.directoryUri
     ? exportSettings.directoryLabel || '已选择自定义文件夹'
     : Platform.OS === 'android'
@@ -235,17 +212,27 @@ export default function SettingsScreen() {
   }
 
   function handleAddImageProvider() {
-    const providerId = addImageProvider();
-    updateImageGenerationSettings({ providerId });
+    setIsImageConnectionTypePickerOpen(true);
   }
 
-  function handleUseLocalImageProxy() {
-    if (!imageProvider) return;
-    updateImageProvider(imageProvider.id, {
-      name: imageProvider.name === '自定义图像厂商' ? '本地反代（CPA）' : imageProvider.name,
-      baseUrl: DEFAULT_IMAGE_BASE_URL,
-      apiKey: '123456',
+  function handleCreateImageConnection(kind: string) {
+    const isLocal = kind === 'comfyui';
+    const baseName = isLocal ? '本地 ComfyUI' : '远程图像连接';
+    let name = baseName;
+    let suffix = 1;
+    while (imageProviderList.some((provider) => provider.name === name)) name = `${baseName} ${++suffix}`;
+    const providerId = addImageProvider({
+      name,
+      baseUrl: isLocal ? DEFAULT_IMAGE_BASE_URL : '',
+      modelId: isLocal ? DEFAULT_IMAGE_MODEL : '',
+      protocol: isLocal ? 'comfyui' : 'auto',
+      auth: isLocal ? 'none' : 'auto',
     });
+    setEditingImageProviderId(providerId);
+    setIsImageConnectionTypePickerOpen(false);
+    setImageConnectionMessage(isLocal
+      ? `已新增「${name}」，请确认服务地址和本地模型。`
+      : `已新增「${name}」，请填写图像接口地址、API Key 和模型 ID。`);
   }
 
   async function handleDeleteImageProvider() {
@@ -255,7 +242,7 @@ export default function SettingsScreen() {
       `确定删除图像厂商「${imageProvider.name}」吗？其 Base URL、API Key 与模型设置也会被移除。`,
       { confirmLabel: '删除' },
     );
-    if (confirmed) removeImageProvider(imageProvider.id);
+    if (confirmed) { removeImageProvider(imageProvider.id); setEditingImageProviderId(''); setImageConnectionMessage(''); }
   }
 
   function handleAddCatalogProvider(providerId: string) {
@@ -324,7 +311,7 @@ export default function SettingsScreen() {
             title="系统设置"
             eyebrow="SYSTEM / PREFERENCES"
             index="04"
-            description="外观、模型职责、图像引擎与导出。连接和高级参数按需展开。"
+            description="外观、模型连接、图像引擎与导出。各功能的模型在对应页面选择。"
             compact
           />
 
@@ -479,7 +466,7 @@ export default function SettingsScreen() {
                   </View>
                   <ThemedText type="small" themeColor="textMuted">
                     {fetchMessage ||
-                      '这里只维护连接与模型清单；写作、协作和后台模型在「模型分工」中指定。'}
+                      '这里维护连接与模型清单；获取模型后，在正文、灵感等功能页面分别选择。'}
                   </ThemedText>
                 </View>
 
@@ -503,107 +490,32 @@ export default function SettingsScreen() {
           </AccordionSection>
 
           <AccordionSection
-            title="模型分工"
-            sectionNumber="03"
-            description="为正文、协作与后台任务分配模型"
-            variant="settings">
-            <ThemedText type="small" themeColor="textMuted">
-              连接只负责让模型可用；这里决定每一类任务实际交给谁。
-            </ThemedText>
-            <SettingsSelectRow
-              label="写作模型"
-              value={activeProvider?.selectedModel
-                ? `${activeProvider.name} · ${displayModelName(activeProvider.selectedModel)}`
-                : '尚未配置'}
-              muted={!activeProvider?.selectedModel}
-              onPress={() => {
-                if (!hasRoutedModels) {
-                  showAppAlert('暂无模型', '请先在「模型连接」中配置厂商并获取模型。');
-                  return;
-                }
-                setIsWritingModelPickerOpen(true);
-              }}
-            />
-            {activeProvider?.selectedModel ? (
-              <>
-                <SwitchRow
-                  label="写作模型思考"
-                  description={writingModelCapability?.reasoning === 'unknown'
-                    ? '能力未收录，也可以自行开启；若接口不接受参数，请调整下方格式。'
-                    : '按这条模型线路保存；模型若固定思考，关闭可能只隐藏思考内容。'}
-                  value={writingModelPreference?.thinkingEnabled ?? (
-                    writingModelCapability?.reasoning === 'unknown' ||
-                    !['deepseek', 'mimo', 'glm', 'qwen', 'kimi', 'openai', 'anthropic', 'gemini', 'xai'].includes(activeProvider.id)
-                      ? false
-                      : writingModelCapability?.reasoning === 'always' || !generationSettings.thinkingDisabled)}
-                  onValueChange={(thinkingEnabled) =>
-                    updateProviderModelSettings(activeProvider.id, activeProvider.selectedModel, { thinkingEnabled })
-                  }
-                />
-                {activeProvider.protocol === 'openai-compatible' || !activeProvider.protocol ? (
-                  <SettingsSelectRow
-                    label="思考参数格式"
-                    value={THINKING_PARAMETER_OPTIONS.find((option) => option.value === (
-                      writingModelPreference?.thinkingParameter ?? 'auto'))?.label ?? '自动识别'}
-                    onPress={() => setIsThinkingParameterPickerOpen(true)}
-                  />
-                ) : null}
-              </>
-            ) : null}
-            <SettingsSelectRow
-              label="协作模型"
-              value={generationSettings.collaborationModelId
-                ? `${collaborationProvider?.name ?? '未知厂商'} · ${displayModelName(generationSettings.collaborationModelId)}`
-                : '跟随后台模型'}
-              muted={!generationSettings.collaborationModelId}
-              onPress={() => {
-                if (!hasRoutedModels) {
-                  showAppAlert('暂无模型', '请先在「模型连接」中配置厂商并获取模型。');
-                  return;
-                }
-                setIsCollaborationModelPickerOpen(true);
-              }}
-            />
-            <ThemedText type="small" themeColor="textMuted">
-              Direct、Character、Editor 共用这一模型；留空时跟随后台模型。
-            </ThemedText>
-            <SettingsSelectRow
-              label="后台模型"
-              value={generationSettings.utilityModelId
-                ? `${utilityProvider?.name ?? '未知厂商'} · ${displayModelName(generationSettings.utilityModelId)}`
-                : '跟随写作模型'}
-              muted={!generationSettings.utilityModelId}
-              onPress={() => {
-                if (!hasRoutedModels) {
-                  showAppAlert('暂无模型', '请先在「模型连接」中配置厂商并获取模型。');
-                  return;
-                }
-                setIsBackgroundModelPickerOpen(true);
-              }}
-            />
-            <ThemedText type="small" themeColor="textMuted">
-              Memory 与结构化辅助任务采用速度优先策略；留空时跟随写作模型。
-            </ThemedText>
-          </AccordionSection>
-
-          <AccordionSection
             title="图像引擎"
-            sectionNumber="04"
-            description="角色立绘、私密照片与视觉模型连接"
+            sectionNumber="03"
+            description="独立配置本地或远程图像接口"
             variant="settings">
             <ThemedText type="small" themeColor="textMuted">
-              图像连接独立于文本模型。角色档案中的 AI 生图统一使用这里的连接与模型。
+              按开源模型、Google、OpenAI 选择图像模型。生图使用独立图像接口，角色生成时也可单独换模型。
             </ThemedText>
+            <SettingsSelectRow
+              label="默认图像模型"
+              value={imageModelDisplayName(defaultImageProvider?.modelId)}
+              muted={!defaultImageProvider?.modelId}
+              onPress={() => setIsDefaultImageModelPickerOpen(true)}
+            />
+            <ThemedText type="smallBold">图像接口配置</ThemedText>
             <View style={styles.editorToolbar}>
               <View style={styles.pickerGrow}>
                 <SettingsSelectRow
-                  label="当前图像连接"
+                  label="编辑图像接口"
                   value={imageProvider?.name ?? '尚未选择'}
                   muted={!imageProvider}
                   onPress={() => setIsImageProviderPickerOpen(true)}
                 />
               </View>
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="新增图像连接"
                 onPress={handleAddImageProvider}
                 style={({ pressed }) => [
                   styles.addChip,
@@ -615,30 +527,63 @@ export default function SettingsScreen() {
                 </ThemedText>
               </Pressable>
             </View>
+            {imageConnectionMessage ? <ThemedText accessibilityLiveRegion="polite" type="small" themeColor="accent">{imageConnectionMessage}</ThemedText> : null}
             {imageProvider ? (
               <>
                 <SettingField
-                  label="图像 API Base URL"
-                  value={imageProvider.baseUrl}
-                  placeholder="http://127.0.0.1:8317"
-                  onChangeText={(baseUrl) => updateImageProvider(imageProvider.id, { baseUrl })}
+                  key={`image-name-${imageProvider.id}`}
+                  label="图像连接名称"
+                  value={imageProvider.name}
+                  placeholder="为这条图像连接取名"
+                  onChangeText={(name) => updateImageProvider(imageProvider.id, { name })}
                 />
                 <SettingField
-                  label="API Key"
-                  value={imageProvider.apiKey}
-                  placeholder="填写此图像厂商的 Key"
-                  secureTextEntry
-                  onChangeText={(apiKey) => setImageProviderApiKey(imageProvider.id, apiKey)}
+                  key={`image-url-${imageProvider.id}`}
+                  label="图像 API Base URL"
+                  value={imageProvider.baseUrl}
+                  placeholder={isLocalImageConnection ? DEFAULT_IMAGE_BASE_URL : 'https://图像服务地址/v1 或反代地址'}
+                  onChangeText={(baseUrl) => updateImageProvider(imageProvider.id, { baseUrl })}
                 />
+                {isLocalImageConnection ? <>
                 <ThemedText type="small" themeColor="textMuted">
-                  选择预置模型后会自动设置协议与鉴权；通常不需要填写厂商名称、协议或鉴权方式。
+                  本机运行时使用 127.0.0.1；手机访问电脑上的 ComfyUI 时，请改成电脑局域网 IP（例如 http://192.168.1.20:8188）。
                 </ThemedText>
+                <LocalComfyServiceControl key={`${imageProvider.id}:${imageProvider.baseUrl}:${imageProvider.auth}`} provider={imageProvider} />
+                </> : <>
+                  <SettingsSelectRow
+                    label="图像接口格式"
+                    value={IMAGE_PROTOCOL_OPTIONS.find((option) => option.value === (imageProvider.protocol ?? 'auto'))?.label ?? '自动（按模型）'}
+                    onPress={() => setIsImageProtocolPickerOpen(true)}
+                  />
+                  <SettingField
+                    key={`image-model-${imageProvider.id}`}
+                    label="图像模型 ID"
+                    value={imageProvider.modelId}
+                    placeholder="填写图像服务提供的模型 ID，支持反代别名"
+                    onChangeText={(modelId) => updateImageProvider(imageProvider.id, { modelId })}
+                  />
+                  <ThemedText type="small" themeColor="textMuted">
+                    使用图像服务提供的地址和模型。反代的接口格式以该服务说明为准。
+                  </ThemedText>
+                </>}
+                {!isLocalImageConnection || (imageProvider.auth && !['none', 'auto'].includes(imageProvider.auth)) ? (
+                  <SettingField
+                    key={`image-key-${imageProvider.id}`}
+                    label="图像 API Key"
+                    value={imageProvider.apiKey}
+                    placeholder="填写此图像接口的密钥；无鉴权服务可留空"
+                    secureTextEntry
+                    onChangeText={(apiKey) => setImageProviderApiKey(imageProvider.id, apiKey)}
+                  />
+                ) : null}
                 <ThemedText type="smallBold">
-                  当前模型：{imageModelCatalogEntry(imageProvider.modelId)?.label ?? (imageProvider.modelId || '尚未选择')}
+                  接口默认模型：{imageModelDisplayName(imageProvider.modelId)}
                 </ThemedText>
                 <View style={styles.actionRow}>
-                  {imageModelOptions.length > 0 ? (
+                  {imageModelPresets.length > 0 ? (
                     <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="配置接口模型"
                       onPress={() => setIsImageModelPickerOpen(true)}
                       style={({ pressed }) => [
                         styles.inlineButton,
@@ -646,11 +591,13 @@ export default function SettingsScreen() {
                         pressed && styles.pressed,
                       ]}>
                       <ThemedText type="smallBold" themeColor="accent">
-                        选择预置模型（自动设置协议）
+                        配置接口模型
                       </ThemedText>
                     </Pressable>
                   ) : null}
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="删除当前图像连接"
                     onPress={() => void handleDeleteImageProvider()}
                     style={({ pressed }) => [
                       styles.deleteChip,
@@ -662,48 +609,6 @@ export default function SettingsScreen() {
                     </ThemedText>
                   </Pressable>
                 </View>
-                <AccordionSection title="高级图像连接设置">
-                  <ThemedText type="small" themeColor="textMuted">
-                    仅在自建网关或预置模型无法自动识别时调整。Gemini、OpenAI Images 与 Codex Responses 会使用不同请求路径和鉴权方式。
-                  </ThemedText>
-                  <Pressable
-                    onPress={handleUseLocalImageProxy}
-                    style={({ pressed }) => [
-                      styles.inlineButton,
-                      { borderWidth: 1, borderColor: theme.border },
-                      pressed && styles.pressed,
-                    ]}>
-                    <ThemedText type="smallBold" themeColor="accent">
-                      套用本地 CPA（127.0.0.1:8317 / 123456）
-                    </ThemedText>
-                  </Pressable>
-                  <SettingField
-                    label="显示名称"
-                    value={imageProvider.name}
-                    placeholder="例如：我的 CPA"
-                    onChangeText={(name) => updateImageProvider(imageProvider.id, { name })}
-                  />
-                  <SettingsSelectRow
-                    label="协议"
-                    value={imageProvider.protocol === 'auto' || !imageProvider.protocol
-                      ? '自动（按模型）'
-                      : imageProvider.protocol}
-                    onPress={() => setIsImageProtocolPickerOpen(true)}
-                  />
-                  <SettingsSelectRow
-                    label="鉴权方式"
-                    value={imageProvider.auth === 'auto' || !imageProvider.auth
-                      ? '自动（按模型）'
-                      : imageProvider.auth}
-                    onPress={() => setIsImageAuthPickerOpen(true)}
-                  />
-                  <SettingField
-                    label="自定义模型 ID"
-                    value={imageProvider.modelId}
-                    placeholder="仅当预置列表没有目标模型时填写"
-                    onChangeText={(modelId) => updateImageProvider(imageProvider.id, { modelId })}
-                  />
-                </AccordionSection>
               </>
             ) : (
               <ThemedText type="small" themeColor="textSecondary">
@@ -714,7 +619,7 @@ export default function SettingsScreen() {
 
           <AccordionSection
             title="导出与高级"
-            sectionNumber="05"
+            sectionNumber="04"
             description="正文文件、生成预算与请求稳定性"
             variant="settings">
             <ThemedText type="small" themeColor="textMuted">
@@ -858,7 +763,7 @@ export default function SettingsScreen() {
               onChangeText={updateNovelCreateMaxTokens}
             />
             <ThemedText type="small" themeColor="textMuted">
-              只影响新建页的 AI 大纲与角色补全，与对话长度无关。
+              用于 AI 大纲、角色补全与人物小传。长篇小传可适当调高，需在模型支持的输出范围内；与对话长度无关。
             </ThemedText>
             <SettingField
               label="记忆长度上限"
@@ -918,6 +823,7 @@ export default function SettingsScreen() {
             />
             </AccordionSection>
           </AccordionSection>
+          <AppAboutPanel />
         </ScrollView>
       </SafeAreaView>
 
@@ -972,82 +878,33 @@ export default function SettingsScreen() {
         onSelect={handleAddCatalogProvider}
       />
 
-      <ModelRoutePicker
-        visible={isWritingModelPickerOpen}
-        title="选择写作模型"
-        providers={providers}
-        selectedModelId={activeProvider?.selectedModel}
-        selectedProviderId={activeProvider?.id}
-        onClose={() => setIsWritingModelPickerOpen(false)}
-        onSelect={(modelId, providerId) => {
-          setActiveProvider(providerId);
-          setProviderSelectedModel(providerId, modelId);
-          setEditingProviderId(providerId);
-          setIsWritingModelPickerOpen(false);
-        }}
-      />
-
-      <ModelRoutePicker
-        visible={isCollaborationModelPickerOpen}
-        title="选择协作模型"
-        providers={providers}
-        selectedModelId={generationSettings.collaborationModelId}
-        selectedProviderId={generationSettings.collaborationProviderId}
-        followOption={{
-          label: '跟随后台模型',
-          description: '使用后台模型的设置',
-          onPress: () => {
-            updateGenerationSettings({ collaborationProviderId: '', collaborationModelId: '' });
-            setIsCollaborationModelPickerOpen(false);
-          },
-        }}
-        onClose={() => setIsCollaborationModelPickerOpen(false)}
-        onSelect={(modelId, providerId) => {
-          updateGenerationSettings({ collaborationProviderId: providerId, collaborationModelId: modelId });
-          setIsCollaborationModelPickerOpen(false);
-        }}
-      />
-
-      <ModelRoutePicker
-        visible={isBackgroundModelPickerOpen}
-        title="选择后台模型"
-        providers={providers}
-        selectedModelId={generationSettings.utilityModelId}
-        selectedProviderId={generationSettings.utilityProviderId}
-        followOption={{
-          label: '跟随写作模型',
-          description: '使用写作模型的设置',
-          onPress: () => {
-            updateGenerationSettings({ utilityProviderId: '', utilityModelId: '' });
-            setIsBackgroundModelPickerOpen(false);
-          },
-        }}
-        onClose={() => setIsBackgroundModelPickerOpen(false)}
-        onSelect={(modelId, providerId) => {
-          updateGenerationSettings({ utilityProviderId: providerId, utilityModelId: modelId });
-          setIsBackgroundModelPickerOpen(false);
-        }}
+      <OptionsModal
+        visible={isImageConnectionTypePickerOpen}
+        title="新增图像连接"
+        options={[
+          { value: 'remote', label: '远程 / 反代图像接口', description: '独立填写地址、密钥和图像模型，支持 Gemini 与 OpenAI 兼容接口' },
+          { value: 'comfyui', label: '本地 ComfyUI', description: '连接电脑上的 ComfyUI，使用 Qwen Image、MOSS 或 Z-Image' },
+        ]}
+        selectedValue=""
+        onClose={() => setIsImageConnectionTypePickerOpen(false)}
+        onSelect={handleCreateImageConnection}
       />
 
       <OptionsModal
-        visible={isThinkingParameterPickerOpen}
-        title="思考参数格式"
-        options={THINKING_PARAMETER_OPTIONS}
-        selectedValue={writingModelPreference?.thinkingParameter ?? 'auto'}
-        onClose={() => setIsThinkingParameterPickerOpen(false)}
-        onSelect={(value) => {
-          if (activeProvider?.selectedModel) {
-            updateProviderModelSettings(activeProvider.id, activeProvider.selectedModel, {
-              thinkingParameter: value as ProviderModelSettings['thinkingParameter'],
-            });
-          }
-          setIsThinkingParameterPickerOpen(false);
+        visible={isImageProtocolPickerOpen}
+        title="图像接口格式"
+        options={IMAGE_PROTOCOL_OPTIONS}
+        selectedValue={imageProvider?.protocol ?? 'auto'}
+        onClose={() => setIsImageProtocolPickerOpen(false)}
+        onSelect={(protocol) => {
+          if (imageProvider) updateImageProvider(imageProvider.id, { protocol: protocol as ImageProviderProtocol });
+          setIsImageProtocolPickerOpen(false);
         }}
       />
 
       <OptionsModal
         visible={isImageProviderPickerOpen}
-        title="选择图像厂商"
+        title="选择要编辑的图像接口"
         options={imageProviderList.map((provider) => ({
           value: provider.id,
           label: provider.name,
@@ -1059,122 +916,43 @@ export default function SettingsScreen() {
           icon: providerLogoSource(provider.id),
           accent: provider.accent ?? '#6B7280',
         }))}
-        selectedValue={imageGenerationSettings.providerId}
+        selectedValue={imageProvider?.id ?? ''}
         onClose={() => setIsImageProviderPickerOpen(false)}
         onSelect={(providerId) => {
-          updateImageGenerationSettings({ providerId });
+          setEditingImageProviderId(providerId);
+          setImageConnectionMessage('');
           setIsImageProviderPickerOpen(false);
         }}
       />
 
-      <OptionsModal
+      <ModelRoutePicker
+        visible={isDefaultImageModelPickerOpen}
+        title="选择默认图像模型"
+        description="按模型分组；待配置的模型请先添加图像接口"
+        catalog={imageModelCatalog}
+        selectedModelId={defaultImageProvider?.modelId}
+        selectedProviderId={imageGenerationSettings.providerId}
+        onClose={() => setIsDefaultImageModelPickerOpen(false)}
+        onSelect={(modelId, providerId) => {
+          updateImageProvider(providerId, { modelId });
+          updateImageGenerationSettings({ providerId });
+          setEditingImageProviderId(providerId);
+          setImageConnectionMessage('');
+          setIsDefaultImageModelPickerOpen(false);
+        }}
+      />
+
+      <ModelRoutePicker
         visible={isImageModelPickerOpen}
-        title="选择图像模型"
-        options={imageModelOptions.map((model) => ({
-          value: model.id,
-          label: model.label,
-          description: `${model.description} · 模型 ID：${model.id}`,
-        }))}
-        selectedValue={imageProvider?.modelId ?? ''}
+        title="配置接口模型"
+        description="选择此图像接口提供的模型；反代别名也可在表单直接填写"
+        catalog={imageModelPresets}
+        selectedModelId={imageProvider?.modelId}
+        selectedProviderId={imageProvider?.id}
         onClose={() => setIsImageModelPickerOpen(false)}
-        onSelect={(modelId) => {
-          if (imageProvider) {
-            const preset = imageModelCatalogEntry(modelId);
-            updateImageProvider(imageProvider.id, {
-              modelId,
-              protocol: preset?.protocol ?? 'auto',
-              auth: preset?.auth ?? 'auto',
-            });
-          }
+        onSelect={(modelId, providerId) => {
+          updateImageProvider(providerId, { modelId });
           setIsImageModelPickerOpen(false);
-        }}
-      />
-
-      <OptionsModal
-        visible={isImageProtocolPickerOpen}
-        title="选择图像协议"
-        options={[
-          {
-            value: 'auto',
-            label: '自动（按模型）',
-            description: '根据预置模型自动选择 Gemini、OpenAI Images 或 Codex Responses 路径',
-          },
-          {
-            value: 'google-generate-content',
-            label: 'Gemini generateContent',
-            description: '调用 /v1beta/models/<模型>:generateContent，适合 Gemini / CPA 反代',
-          },
-          {
-            value: 'openai-compatible',
-            label: 'OpenAI-compatible',
-            description: '调用 /v1/chat/completions，适合兼容 OpenAI 图片接口的厂商',
-          },
-          {
-            value: 'openai-images',
-            label: 'OpenAI Images API',
-            description: '调用 /v1/images/generations，适合直接使用 gpt-image-2',
-          },
-          {
-            value: 'openai-responses-image',
-            label: 'OpenAI Responses · Codex 图像工具',
-            description: '调用 /v1/responses + image_generation，适合 CPA Codex 额度',
-          },
-        ]}
-        selectedValue={imageProvider?.protocol ?? 'auto'}
-        onClose={() => setIsImageProtocolPickerOpen(false)}
-        onSelect={(protocol) => {
-          if (!imageProvider) return;
-          updateImageProvider(imageProvider.id, {
-            protocol: protocol as ImageProviderProtocol,
-            auth:
-              protocol === 'auto'
-                ? 'auto'
-                : protocol === 'google-generate-content'
-                  ? 'x-goog-api-key'
-                  : 'bearer',
-          });
-          setIsImageProtocolPickerOpen(false);
-        }}
-      />
-
-      <OptionsModal
-        visible={isImageAuthPickerOpen}
-        title="选择图像鉴权方式"
-        options={[
-          {
-            value: 'auto',
-            label: '自动（按模型）',
-            description: '根据预置模型自动选择 Bearer 或 Gemini Key；未知模型默认 Bearer',
-          },
-          {
-            value: 'bearer',
-            label: 'Bearer Token',
-            description: '请求头 Authorization: Bearer <API Key>',
-          },
-          {
-            value: 'x-api-key',
-            label: 'x-api-key',
-            description: '请求头 x-api-key: <API Key>',
-          },
-          {
-            value: 'x-goog-api-key',
-            label: 'x-goog-api-key',
-            description: '请求头 x-goog-api-key，并附加 Gemini key 查询参数',
-          },
-          {
-            value: 'none',
-            label: '无需鉴权',
-            description: '不发送 API Key；仅适用于网关明确开放访问的地址',
-          },
-        ]}
-        selectedValue={imageProvider?.auth ?? 'auto'}
-        onClose={() => setIsImageAuthPickerOpen(false)}
-        onSelect={(auth) => {
-          if (!imageProvider) return;
-          updateImageProvider(imageProvider.id, {
-            auth: auth as ImageProviderAuth,
-          });
-          setIsImageAuthPickerOpen(false);
         }}
       />
 
@@ -1251,17 +1029,12 @@ function SettingField({
   );
 }
 
-function displayModelName(modelId: string) {
-  const normalized = modelId.trim().replace(/^models\//i, '');
-  return normalized.replace(/[-_]+/g, ' ');
-}
-
-const THINKING_PARAMETER_OPTIONS = [
-  { value: 'auto', label: '自动识别', description: '按模型名称选择常见参数' },
-  { value: 'thinking', label: 'thinking.type', description: 'DeepSeek、GLM 等接口' },
-  { value: 'enable_thinking', label: 'enable_thinking', description: 'Qwen 等接口' },
-  { value: 'reasoning_effort', label: 'reasoning_effort', description: '部分 OpenAI 兼容网关' },
-  { value: 'none', label: '不发送思考参数', description: '由网关或模型自行决定' },
+const IMAGE_PROTOCOL_OPTIONS: { value: ImageProviderProtocol; label: string; description: string }[] = [
+  { value: 'auto', label: '自动（按模型）', description: '常用图像模型使用对应格式；自定义模型默认使用 Chat Completions' },
+  { value: 'openai-compatible', label: 'OpenAI 兼容聊天接口', description: '/v1/chat/completions · 适合通过聊天接口返回图片的反代' },
+  { value: 'google-generate-content', label: 'Gemini 图像接口', description: '/v1beta/models/模型:generateContent' },
+  { value: 'openai-images', label: 'OpenAI Images', description: '/v1/images/generations · 文生图' },
+  { value: 'openai-responses-image', label: 'OpenAI Responses 图像工具', description: '/v1/responses · image_generation' },
 ];
 
 const styles = StyleSheet.create({

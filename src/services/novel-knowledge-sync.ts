@@ -9,7 +9,7 @@ import type {
   NovelStoryAnalysis,
 } from '@/types/tavern';
 import { generateId, namesMatch } from '@/utils/helpers';
-import { syncDossiersWithCast } from '@/utils/novel-dossiers';
+import { contentFromCast, syncDossiersWithCast } from '@/utils/novel-dossiers';
 import { createEmptyLoreEntry } from '@/utils/novel-lore';
 
 /** 同步报告：用于 UI 提示与测试断言。 */
@@ -71,7 +71,7 @@ function castFromAnalysisCharacter(
     weight: '',
     appearance: character.appearance?.trim() ?? '',
     personality: character.personality?.trim() ?? '',
-    speechStyle: state?.speakingStyle.trim() ?? character.speechStyle?.trim() ?? '',
+    speechStyle: character.speechStyle?.trim() || state?.speakingStyle.trim() || '',
     background: backgroundParts.join('\n'),
     isProtagonist: isProtagonistRole(character.role) || undefined,
     motive: character.motivation?.trim() || state?.motive.trim() || undefined,
@@ -123,7 +123,7 @@ function relationsFromAnalysis(
  */
 export function syncStoryAnalysisToKnowledgeBase(
   novel: Novel,
-  options?: { nsfwEnabled?: boolean },
+  options?: { nsfwEnabled?: boolean; refreshGenerated?: boolean },
 ): {
   cast: NovelCastCharacter[];
   characterDossiers: NovelCharacterDossier[];
@@ -135,7 +135,7 @@ export function syncStoryAnalysisToKnowledgeBase(
   const nsfwEnabled = options?.nsfwEnabled === true;
   const report: KnowledgeSyncReport = { ...EMPTY_SYNC_REPORT };
 
-  if (!analysis || !analysis.characters.length) {
+  if (!analysis) {
     return {
       cast: novel.cast ?? [],
       characterDossiers: novel.characterDossiers ?? [],
@@ -155,6 +155,7 @@ export function syncStoryAnalysisToKnowledgeBase(
 
   // ── 1. 角色卡 ────────────────────────────────────────────────────────────
   const newCast: NovelCastCharacter[] = [];
+  const refreshedCast = new Map<string, NovelCastCharacter>();
   for (const character of analysis.characters) {
     if (!character.name.trim()) {
       continue;
@@ -164,7 +165,7 @@ export function syncStoryAnalysisToKnowledgeBase(
       report.skippedCast += 1;
       // 自动生成的卡在检索增强后刷新公开字段；用户手动编辑过的卡不覆盖。
       const existing = castByName.get(nameKey(character.name))!;
-      if (existing.generatedFromReply) {
+      if (existing.generatedFromReply && options?.refreshGenerated !== false) {
         const refreshed = castFromAnalysisCharacter(
           character,
           state,
@@ -187,6 +188,7 @@ export function syncStoryAnalysisToKnowledgeBase(
           }
         }
         merged.privacy = nsfwEnabled ? refreshed.privacy : undefined;
+        refreshedCast.set(merged.id, merged);
         castByName.set(nameKey(character.name), merged);
       }
       continue;
@@ -203,7 +205,18 @@ export function syncStoryAnalysisToKnowledgeBase(
   const existingDossiers = Array.isArray(novel.characterDossiers)
     ? novel.characterDossiers
     : [];
-  const nextDossiers = syncDossiersWithCast(nextCast, existingDossiers);
+  const dossiersById = new Map(existingDossiers.map((dossier) => [dossier.id, dossier]));
+  const nextDossiers = syncDossiersWithCast(nextCast, existingDossiers).map((dossier) => {
+    const existing = dossiersById.get(dossier.id);
+    if (!existing) return dossier;
+    const refreshed = dossier.castId ? refreshedCast.get(dossier.castId) : undefined;
+    // Preserve authored aliases, biography and switches; only auto cards refresh their public text.
+    return {
+      ...existing,
+      castId: dossier.castId,
+      ...(refreshed ? { content: contentFromCast(refreshed), updatedAt: timestamp } : {}),
+    };
+  });
 
   // ── 2. 正史 → lore ───────────────────────────────────────────────────────
   const existingLore = Array.isArray(novel.loreEntries) ? novel.loreEntries : [];

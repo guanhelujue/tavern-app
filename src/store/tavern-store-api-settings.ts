@@ -1,12 +1,14 @@
 import { modelCapabilities, modelIdsEqual } from '../constants/provider-capabilities';
 import { catalogEntry, createEmptyProvider, DEFAULT_PROVIDERS } from '../constants/providers';
 import { normalizeReplyLengthPreset } from '../constants/reply-length';
+import { AI_TASK_IDS, AI_TASKS } from '../constants/ai-tasks';
 import type {
   AgentModelBinding,
   ApiSettings,
   GenerationSettings,
   LlmProvider,
   NovelAgentId,
+  AiTaskId,
 } from '../types/tavern';
 
 const DEFAULT_PROVIDER_CONTEXT_WINDOW_TOKENS = 32_000;
@@ -109,6 +111,7 @@ export const defaultGenerationSettings: GenerationSettings = {
   /** Empty = collaboration agents fall back to the background lane. */
   collaborationProviderId: '',
   collaborationModelId: '',
+  taskModelBindings: {},
   agentModelBindings: {},
   contextWindowMessages: 20,
   streamingEnabled: true,
@@ -162,6 +165,7 @@ export function normalizeGenerationSettings(
     normalizeLaneId(settings?.utilityProviderId) || legacyBackgroundBinding?.providerId || '';
   const utilityModelId =
     normalizeLaneId(settings?.utilityModelId) || legacyBackgroundBinding?.modelId || '';
+  const taskModelBindings = normalizeTaskModelBindings(settings?.taskModelBindings);
 
   return {
     temperature:
@@ -180,9 +184,9 @@ export function normalizeGenerationSettings(
     utilityModelId,
     collaborationProviderId,
     collaborationModelId,
-    // Legacy per-agent assignments are deliberately normalized away. Keeping
-    // an empty field makes old persisted snapshots harmless while ensuring no
-    // hidden override can bypass the three shared lanes.
+    taskModelBindings,
+    // Legacy per-agent assignments are deliberately normalized away; task routes
+    // are stored separately in taskModelBindings.
     agentModelBindings: {},
     contextWindowMessages:
       typeof settings?.contextWindowMessages === 'number' && settings.contextWindowMessages > 0
@@ -218,6 +222,19 @@ export function normalizeGenerationSettings(
   };
 }
 
+export function normalizeTaskModelBindings(
+  bindings?: Partial<Record<AiTaskId, AgentModelBinding>> | null,
+): Partial<Record<AiTaskId, AgentModelBinding>> {
+  const result: Partial<Record<AiTaskId, AgentModelBinding>> = {};
+  for (const task of AI_TASK_IDS) {
+    const value = bindings?.[task];
+    if (value && typeof value.providerId === 'string' && value.providerId.trim() && typeof value.modelId === 'string' && value.modelId.trim()) {
+      result[task] = { providerId: value.providerId.trim(), modelId: value.modelId.trim() };
+    }
+  }
+  return result;
+}
+
 function normalizeLaneId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -248,6 +265,7 @@ export function resolveApiSettings(
     preferredProviderId?: string;
     /** utility = create AI / suggested routes (background lane). */
     purpose?: 'chat' | 'utility' | 'collaboration' | 'agent';
+    task?: AiTaskId;
   },
 ): ApiSettings {
   const normalized = normalizeGenerationSettings(generationSettings);
@@ -260,6 +278,8 @@ export function resolveApiSettings(
 
   let preferredModelId = preference?.preferredModelId?.trim() || '';
   let preferredProviderId = preference?.preferredProviderId?.trim() || '';
+
+  const taskBinding = preference?.task ? normalized.taskModelBindings?.[preference.task] : undefined;
 
   if (
     preference?.purpose === 'utility' ||
@@ -288,6 +308,15 @@ export function resolveApiSettings(
       preferredModelId = selectedLane.modelId || preferredModelId;
       preferredProviderId = selectedLane.providerId || preferredProviderId;
     }
+  }
+
+  // A function-specific route always wins over the shared purpose lane.
+  if (taskBinding) {
+    if (!providers[taskBinding.providerId]) {
+      throw new Error(`“${AI_TASKS[preference!.task!].label}”绑定的模型厂商已不存在，请重新选择模型。`);
+    }
+    preferredProviderId = taskBinding.providerId;
+    preferredModelId = taskBinding.modelId;
   }
 
   const preferredProvider =
@@ -353,10 +382,10 @@ export function resolveApiSettings(
 
 /**
  * Resolve the actual Provider/model used by one novel workflow agent.
- * Narrator follows the global writing lane. Direct/Character/Editor share the
- * collaboration lane, while Memory stays on the background lane. Older
- * per-agent bindings are migrated by normalizeGenerationSettings and no
- * longer influence routing.
+ * Each agent uses its function's fixed model when configured. Without a task
+ * binding, Narrator follows the writing default, Direct/Character/Editor use
+ * collaboration, and Memory uses the background default. Legacy per-agent
+ * assignments are migrated by normalizeGenerationSettings.
  */
 export function resolveAgentApiSettings(
   providers: Record<string, LlmProvider>,
@@ -374,6 +403,7 @@ export function resolveAgentApiSettings(
 
   return resolveApiSettings(providers, normalized, {
     purpose: isNarrator ? 'chat' : isCollaborationAgent ? 'collaboration' : 'utility',
+    task: isNarrator ? 'chat' : agentId === 'memory' ? 'memory' : agentId === 'character' ? 'character' : agentId === 'editor' ? 'review' : 'outline',
   });
 }
 

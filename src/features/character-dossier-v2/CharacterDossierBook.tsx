@@ -1088,8 +1088,8 @@ export function CharacterDossierBook({
                       ]}
                     >
                       {dossier.private.variant === 'male'
-                        ? '成年男性私密档案'
-                        : '成年女性私密档案'}
+                        ? '男性私密档案'
+                        : '女性私密档案'}
                     </Text>
                     <Text
                       style={[
@@ -1097,7 +1097,7 @@ export function CharacterDossierBook({
                         { color: visual.muted },
                       ]}
                     >
-                      与公开立绘完全分离。字段允许直接、具体，但只记录对人物和成人叙事有意义的内容。
+                      与公开立绘分开保存。字段允许直接、具体，但只记录对人物和叙事有意义的内容。
                     </Text>
                   </View>
                 </View>

@@ -1,3 +1,4 @@
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -193,6 +194,7 @@ export function NovelStoryMemoryModal({
           {lastMemoryError ? <View style={[styles.errorStrip, { borderColor: theme.error, backgroundColor: theme.errorContainer }]}><ThemedText type="code" themeColor="error">MEMORY WRITE FAILED</ThemedText><ThemedText type="small" themeColor="error">{lastMemoryError}</ThemedText></View> : null}
 
           <ScrollView style={[styles.scroll, isCompact && styles.scrollCompact]} contentContainerStyle={[styles.scrollContent, isCompact && styles.scrollContentCompact]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <TaskModelSelector task="memory" disabled={isSaving || isMerging} />
             <View style={[styles.workspace, isCompact && styles.workspaceCompact]}>
               <View style={[styles.routeDeck, { borderColor: theme.border, backgroundColor: theme.background }]}>
                 <View style={styles.sectionHeading}>

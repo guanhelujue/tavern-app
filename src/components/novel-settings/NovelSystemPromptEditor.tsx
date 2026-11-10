@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { DEFAULT_NOVEL_SYSTEM_PROMPT } from '@/constants/novel-memory';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -54,6 +55,7 @@ export function NovelSystemPromptEditor({ hint }: NovelSystemPromptEditorProps) 
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
         purpose: 'utility',
+        task: 'prompt',
       });
 
       if (
@@ -86,6 +88,7 @@ export function NovelSystemPromptEditor({ hint }: NovelSystemPromptEditorProps) 
     try {
       const apiSettings = resolveApiSettings(providers, generationSettings, {
         purpose: 'utility',
+        task: 'style',
       });
 
       if (
@@ -145,6 +148,7 @@ export function NovelSystemPromptEditor({ hint }: NovelSystemPromptEditorProps) 
         {hint ??
           '默认提示词管叙事规则（包括每章篇幅、叙事节奏等）；文风可选，从参考 txt 总结后拼到文末【文风】。此处修改会写入全局默认，新建小说会带上。'}
       </ThemedText>
+      <TaskModelSelector task="prompt" disabled={busy} />
       <TextInput
         value={novelPromptDefaults.systemPrompt}
         onChangeText={(systemPrompt) => updateNovelPromptDefaults({ systemPrompt })}
@@ -166,6 +170,7 @@ export function NovelSystemPromptEditor({ hint }: NovelSystemPromptEditorProps) 
 
       <View style={styles.styleRow}>
         <ThemedText type="smallBold">文风字数上限</ThemedText>
+        <TaskModelSelector task="style" disabled={isExtractingStyle || isPolishingSystemPrompt} />
         <TextInput
           value={styleMaxChars}
           onChangeText={setStyleMaxChars}

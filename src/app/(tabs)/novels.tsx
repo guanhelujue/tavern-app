@@ -13,19 +13,21 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { DesktopNovelShelf } from '@/components/desktop/DesktopNovelShelf';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { ThemedView } from '@/components/themed-view';
 import { Fonts, Spacing } from '@/constants/theme';
 import { useTavernStore } from '@/store/tavern-store';
 import { resolveNovelImageUri } from '@/utils/novel-images';
 import { importChatSessionBundle } from '@/utils/chat-session-io';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
-import { getNovelShelfRoute } from '@/utils/novel-routing';
 
 const HOME_CONTENT_WIDTH = 1180;
 const CARD_ROTATIONS = ['-3deg', '-1.5deg', '1deg', '2.5deg', '-0.8deg', '1.8deg'];
 
 export default function NovelsTab() {
   const { width } = useWindowDimensions();
+  const desktop = useDesktopLayout();
   const novels = useTavernStore((state) => state.novels);
   const importSessionBundle = useTavernStore((state) => state.importSessionBundle);
   const motionEnabled = useTavernStore((state) => state.appearanceSettings.motionEnabled);
@@ -80,21 +82,8 @@ export default function NovelsTab() {
       return;
     }
 
-    if (novel.isDraft) {
-      router.push((novel.creationMode === 'workbench'
-        ? `/novel/create?draftId=${novelId}`
-        : `/novel/create?draftId=${novelId}`) as Href);
-      return;
-    }
-
-    if (getNovelShelfRoute(novel) === 'workbench') {
-      // 续写工程：直接进入续写工作台，不再经过大详情页。
-      router.push(`/novel/workbench/${novelId}` as Href);
-      return;
-    }
-
-    // 普通新建小说：进入大详情页（阅读设置 / 沉浸阅读 / 对话）。
-    router.push(`/novel/${novelId}` as Href);
+    if (novel.isDraft) useTavernStore.getState().updateNovel(novelId, { isDraft: false, createStep: 3 });
+    router.push(`/novel/workbench/${novelId}` as Href);
   }
 
   async function handleImportNovel() {
@@ -119,8 +108,20 @@ export default function NovelsTab() {
     }
   }
 
-  function handleImportContinuation() {
-    router.push('/novel/continue' as Href);
+  async function handleDeleteNovel(novelId: string) {
+    const state = useTavernStore.getState();
+    const novel = state.novels.find((item) => item.id === novelId);
+    if (!novel) return;
+    if (!await confirmAppAction('删除作品', `确定删除「${novel.name}」吗？章节、对话和记忆也会一并删除，此操作不可撤销。`, { confirmLabel: '确认删除' })) return;
+    try {
+      useTavernStore.getState().deleteNovel(novelId);
+    } catch (error) {
+      showAppAlert('删除失败', error instanceof Error ? error.message : '无法删除作品。');
+    }
+  }
+
+  if (desktop) {
+    return <DesktopNovelShelf novels={novels} onOpen={openNovel} onDelete={(id) => void handleDeleteNovel(id)} onCreate={handleCreateNovel} onImport={() => void handleImportNovel()} />;
   }
 
   return (
@@ -337,9 +338,9 @@ export default function NovelsTab() {
                 <ThemedText type="code" style={styles.cardNumeral}>00</ThemedText>
                 <View style={styles.cardTitlePlate}>
                   <ThemedText type="code" style={styles.cardWorld}>UNDRAWN CARD</ThemedText>
-                  <ThemedText style={styles.cardTitle}>抽取一个新世界</ThemedText>
+                  <ThemedText style={styles.cardTitle}>创建作品</ThemedText>
                   <View style={styles.cardFooterRule} />
-                  <ThemedText type="code" style={styles.cardInstruction}>从空白开始建档</ThemedText>
+                  <ThemedText type="code" style={styles.cardInstruction}>填写世界，进入小说工作台</ThemedText>
                 </View>
               </Pressable>
               </Animated.View>
@@ -355,11 +356,6 @@ export default function NovelsTab() {
                 <Pressable onPress={() => { void handleImportNovel(); }} style={({ pressed }) => [styles.deckTool, pressed && styles.pressed]}>
                   <ThemedText type="code" style={styles.deckToolIndex}>01</ThemedText>
                   <ThemedText style={styles.deckToolLabel}>恢复完整档案</ThemedText>
-                  <ThemedText style={styles.deckToolArrow}>↗</ThemedText>
-                </Pressable>
-                <Pressable onPress={handleImportContinuation} style={({ pressed }) => [styles.deckTool, pressed && styles.pressed]}>
-                  <ThemedText type="code" style={styles.deckToolIndex}>02</ThemedText>
-                  <ThemedText style={styles.deckToolLabel}>接入续写工程</ThemedText>
                   <ThemedText style={styles.deckToolArrow}>↗</ThemedText>
                 </Pressable>
               </View>
