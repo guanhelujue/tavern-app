@@ -5,13 +5,13 @@ import { Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 're
 
 import { NovelChapterEditorModal } from '@/components/novel-continue/NovelChapterEditorModal';
 import { NovelTextImportModal } from '@/components/novel-continue/NovelTextImportModal';
+import { NovelMobileChapterHome } from '@/components/novel-continue/NovelMobileChapterHome';
 import { ChapterBookSlips } from '@/components/desktop/ChapterBookSlips';
 import { ThemedText } from '@/components/themed-text';
 import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { useTheme } from '@/hooks/use-theme';
 import { useTavernStore } from '@/store/tavern-store';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
-import { getNovelAuditSourceFingerprint, isNovelRewriteAuditCurrent } from '@/services/novel-audit-freshness';
 import { getActiveNovelRequestId, isNovelMutationActive } from '@/services/novel-request-lifecycle';
 import type { NovelChapter } from '@/types/tavern';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
@@ -60,12 +60,9 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
   const nextIndex = (finalChapters.at(-1)?.index ?? 0) + 1;
   const requestedPlan = novel?.outline?.volumes.flatMap((volume) => volume.chapters).find((item) => item.index === outlineIndex);
   const manualIndex = requestedPlan?.index ?? (chapters.at(-1)?.index ?? 0) + 1;
-  const pendingDraft = chapters.find((chapter) => chapter.status === 'draft');
   const outlineChapters = novel?.outline?.volumes.flatMap((volume) => volume.chapters) ?? [];
   const plannedCount = Math.max(novel?.projectBrief?.plannedChapters ?? 0, ...outlineChapters.map((chapter) => chapter.index), 0);
   const nextOutline = outlineChapters.find((chapter) => chapter.index === manualIndex);
-  const auditedCount = novel ? chapters.filter((chapter) => novel.novelRewriteAudits?.some((audit) =>
-    isNovelRewriteAuditCurrent(audit, chapter.id, getNovelAuditSourceFingerprint(novel, chapter)) && audit.passed)).length : 0;
   const activeJob = novel?.novelGenerationJobs?.find((job) => job.kind === 'write' && job.status === 'running');
   const pausedJob = novel?.novelGenerationJobs?.find((job) => job.kind === 'write' && (job.status === 'paused' || job.status === 'failed'));
   const busy = operation || Boolean(activeJob);
@@ -212,42 +209,30 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
         {error ? <ThemedText accessibilityRole="alert" style={{ color: theme.error }}>{error}</ThemedText> : null}
   </>;
   return <View style={[styles.root, { backgroundColor: theme.background }]}>
-    <View style={[styles.header, { borderBottomColor: theme.outlineVariant }, !desktop && styles.compactHeader]}>
-      {editorOpen && <Action onPress={() => router.replace(`/novel/chapters/${novelId}`)}>← 返回书简</Action>}
+    {(desktop || editorOpen) && <View style={[styles.header, { borderBottomColor: theme.outlineVariant }, !desktop && styles.compactHeader]}>
+      {editorOpen && <Action onPress={() => router.replace(`/novel/chapters/${novelId}`)}>{desktop ? '← 返回书简' : '返回目录'}</Action>}
       <View style={styles.heading}><ThemedText type="subtitle">{editorOpen ? '章节写作' : '章节创作'}</ThemedText><ThemedText type="small" themeColor="textSecondary">{novel.name} · 共 {chapters.length} 章</ThemedText></View>
       {desktop && editorOpen && selected && <Action disabled={locked} onPress={() => void deleteChapter()}>删除章节</Action>}
       {!editorOpen && <View style={styles.actions}><Action disabled={locked} onPress={() => setImportOpen(true)}>导入正文</Action><Action onPress={() => router.push(`/novel/workbench/${novelId}?focus=tools`)}>任务与导出</Action></View>}
-    </View>
+    </View>}
     {editorOpen ? <ScrollView style={styles.editorScroll} contentContainerStyle={[styles.editorContent, !desktop && styles.compactEditorContent]} keyboardShouldPersistTaps="handled">
       {notices}
       {continuationIntent && selected && <ThemedText type="small" themeColor="textSecondary">第 {selected.index} 章已有草稿，已为你打开；先定稿，再继续下一章。</ThemedText>}
-      {selectedId && !selected ? <View style={styles.empty}><ThemedText>该章节已不存在，请返回书简选择其他章节。</ThemedText></View> : unloaded ? <View style={styles.empty}><ThemedText>{selected?.contentStatus === 'error' ? '正文加载失败' : '正在加载正文…'}</ThemedText><Action onPress={() => { if (selectedId) void hydrateChapter(selectedId).catch(() => setError('正文加载失败，请重试。')); }}>重新加载</Action></View> : <ChapterForm
+      {selectedId && !selected ? <View style={styles.empty}><ThemedText>该章节已不存在，请返回目录选择其他章节。</ThemedText></View> : unloaded ? <View style={styles.empty}><ThemedText>{selected?.contentStatus === 'error' ? '正文加载失败' : '正在加载正文…'}</ThemedText><Action onPress={() => { if (selectedId) void hydrateChapter(selectedId).catch(() => setError('正文加载失败，请重试。')); }}>重新加载</Action></View> : <ChapterForm
         key={selected ? `${selected.id}:${selected.updatedAt}` : `new:${inspirationId ?? ''}`}
         chapter={selected} nextIndex={manualIndex} initialPrompt={!continuationIntent && inspiration ? inspiration.content : !selected ? [nextOutline?.goal, nextOutline?.characterChange && `人物变化：${nextOutline.characterChange}`, nextOutline?.foreshadowing && `伏笔与线索：${nextOutline.foreshadowing}`, nextOutline?.endingHook && `章末衔接：${nextOutline.endingHook}`].filter(Boolean).join('\n\n') : ''}
         initialTitle={nextOutline?.title ?? ''}
         defaultTargetWords={novel.continuationSettings?.targetWords ?? 1800}
         busy={locked} generating={busy} stream={stream} onDirty={setDirty} onSave={save} onGenerate={(draft) => void generate(draft)}
         onAdvanced={() => setAdvancedId(selected?.id ?? null)} />}
-    </ScrollView> : <ScrollView style={styles.overview} contentContainerStyle={styles.overviewContent} keyboardShouldPersistTaps="handled">
-      {!desktop && <View style={[styles.overviewNotices, { gap: 14 }]}>
-        <View style={[styles.notice, { backgroundColor: theme.surface }]}>
-          <View style={styles.noticeText}><ThemedText type="smallBold">{plannedCount ? `计划 ${plannedCount} 章` : '尚未设置篇幅'} · 正文 {chapters.filter((chapter) => chapter.content.trim() || chapter.contentStatus === 'unloaded').length} · 审查通过 {auditedCount} · 定稿 {finalChapters.length}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">{pendingDraft ? `第 ${pendingDraft.index} 章草稿待处理，保存、审查并定稿后可继续。` : plannedCount && finalChapters.length >= plannedCount ? '已完成计划篇幅，可检查全书一致性并导出。' : `下一步：写第 ${nextIndex} 章${nextOutline?.title ? `《${nextOutline.title}》` : ''}。`}</ThemedText></View>
-          <Action primary disabled={busy} onPress={() => openChapter(pendingDraft?.id ?? 'new')}>{pendingDraft ? '继续处理草稿' : '写下一章'}</Action>
-        </View>
-        <View style={styles.actions}>
-          <Action onPress={() => router.push(`/novel/knowledge/characters/${novelId}`)}>人物 · {novel.cast?.length ?? 0}</Action>
-          <Action onPress={() => router.push(`/novel/world-outline/${novelId}`)}>世界与大纲 · {outlineChapters.length} 章</Action>
-          <Action onPress={() => router.push(`/novel/inspiration/${novelId}`)}>灵感对话</Action>
-          <Action onPress={() => router.push(`/novel/workbench/${novelId}?focus=context`)}>上下文管理</Action>
-          <Action onPress={() => router.push(`/novel/workbench/${novelId}?focus=tools`)}>任务与导出</Action>
-          <Action disabled={busy} onPress={() => void exportBackup()}>导出 JSON 备份</Action>
-        </View>
-        {Platform.OS === 'web' && <ThemedText type="small" themeColor="textMuted">作品保存在当前浏览器；跨浏览器继续创作，请先导出 JSON 备份，再从作品库导入。</ThemedText>}
-      </View>}
+    </ScrollView> : desktop ? <ScrollView style={styles.overview} contentContainerStyle={styles.overviewContent} keyboardShouldPersistTaps="handled">
       {Boolean(legacy.length > 0 || activeJob || pausedJob || error) && <View style={styles.overviewNotices}>{notices}</View>}
       <ChapterBookSlips chapters={chapters} locked={busy} onCreate={() => openChapter('new')} onOpen={openChapter} />
-    </ScrollView>}
+    </ScrollView> : <NovelMobileChapterHome name={novel.name} worldName={novel.worldName} chapters={chapters} plannedCount={plannedCount}
+      nextIndex={manualIndex} nextTitle={nextOutline?.title} busy={busy} locked={locked}
+      notices={legacy.length > 0 || activeJob || pausedJob || error ? notices : undefined}
+      onOpen={openChapter} onCreate={() => openChapter('new')} onImport={() => setImportOpen(true)}
+      onTools={() => router.push(`/novel/workbench/${novelId}?focus=tools`)} onExport={() => void exportBackup()} />}
     <NovelChapterEditorModal visible={Boolean(advancedId)} novelId={novelId} chapter={chapters.find((chapter) => chapter.id === advancedId) ?? null} onClose={() => setAdvancedId(null)} />
     {importOpen && <NovelTextImportModal novelId={novelId} visible onClose={() => setImportOpen(false)} />}
   </View>;
@@ -315,7 +300,7 @@ function ChapterForm({ chapter, nextIndex, initialPrompt, initialTitle, defaultT
 const styles = StyleSheet.create({
   planningToggle: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, minHeight: 44 }, planningGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 }, planningField: { flexGrow: 1, flexBasis: 280, minWidth: 0, gap: 8 },
   root: { flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }, header: { paddingHorizontal: 36, paddingVertical: 28, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 16, borderBottomWidth: StyleSheet.hairlineWidth }, heading: { flex: 1, minWidth: 200, gap: 6 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, button: { minHeight: 40, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderRadius: 7, justifyContent: 'center', alignItems: 'center' }, disabled: { opacity: 0.45 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, button: { minHeight: Platform.OS === 'web' ? 40 : 48, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderRadius: 7, justifyContent: 'center', alignItems: 'center' }, disabled: { opacity: 0.45 },
   compactHeader: { paddingHorizontal: 20, paddingVertical: 20 },
   overview: { flex: 1, minWidth: 0, width: '100%' }, overviewContent: { paddingBottom: 20, minWidth: 0 }, overviewNotices: { paddingHorizontal: 36, paddingBottom: 16, gap: 12 },
   editorScroll: { flex: 1, minWidth: 0, width: '100%' }, editorContent: { padding: 36, gap: 18, maxWidth: 1160, width: '100%', alignSelf: 'center', paddingBottom: 72 }, compactEditorContent: { padding: 16, paddingBottom: 40 },
