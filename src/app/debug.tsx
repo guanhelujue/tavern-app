@@ -1,10 +1,11 @@
 import { Stack, router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from 'react';
+import { Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { MobilePageIntro, MobileAction, MobileSegmentedTabs, MobileEmptyState, mobileStyles } from '@/components/mobile/MobileUI';
 import { Spacing } from '@/constants/theme';
 import {
   clearDebugRequestHistory,
@@ -17,6 +18,7 @@ import {
   type DebugRequestSnapshot,
 } from '@/services/debug-request-history';
 import { useTavernStore } from '@/store/tavern-store';
+import { useTheme } from '@/hooks/use-theme';
 import { confirmAppAction } from '@/utils/app-alert';
 import { formatImageDebugStep } from '@/services/image-request-trace';
 
@@ -26,12 +28,12 @@ const C = {
   surface: '#FAF7F1',
   surfaceHover: '#E9E0D6',
   border: '#CFC3B6',
-  green: '#4E6B59',
-  greenDim: '#71877A',
-  greenMuted: '#688876',
-  cyan: '#587985',
-  cyanDim: '#6F8C94',
-  cyanMuted: '#86A7AF',
+  green: '#79543A',
+  greenDim: '#9A7253',
+  greenMuted: '#A27B5A',
+  cyan: '#8A6840',
+  cyanDim: '#A78965',
+  cyanMuted: '#B29776',
   amber: '#9B6845',
   amberDim: '#B18A69',
   red: '#A24F45',
@@ -45,21 +47,21 @@ function getPurposeLabel(purpose?: string): string {
 }
 
 const CATEGORY_FILTERS: { key: DebugRequestCategory; label: string }[] = [
-  { key: 'writing', label: 'WRITE' },
-  { key: 'collaboration', label: 'COLLAB' },
-  { key: 'support', label: 'AUX' },
-  { key: 'image', label: 'IMAGE / 生图' },
+  { key: 'writing', label: '写作' },
+  { key: 'collaboration', label: '协作' },
+  { key: 'support', label: '辅助' },
+  { key: 'image', label: '图像' },
 ];
 
 function timeLabel(iso: string): string {
   return iso.replace('T', ' ').slice(0, 19);
 }
 
-function tagColor(tag: DebugRequestCategory): string {
+function tagColor(tag: DebugRequestCategory, palette = C): string {
   switch (tag) {
-    case 'writing': return C.green;
-    case 'collaboration': return C.cyan;
-    default: return C.amber;
+    case 'writing': return palette.green;
+    case 'collaboration': return palette.cyan;
+    default: return palette.amber;
   }
 }
 
@@ -102,6 +104,15 @@ function formatDebugSnapshotForClipboard(snapshot: DebugRequestSnapshot): string
 
 // ── Sub-components ──
 
+function useDebugPalette() {
+  const theme = useTheme();
+  return Platform.OS === 'web' ? C : { ...C, bg: theme.background, surface: theme.surface, surfaceHover: theme.surfaceVariant, border: theme.outlineVariant, green: theme.primary, greenDim: theme.textSecondary, greenMuted: theme.textMuted, cyan: theme.primary, cyanDim: theme.textSecondary, cyanMuted: theme.textSecondary, amber: theme.warning, amberDim: theme.textSecondary, red: theme.error, redDim: theme.error, white: theme.text, whiteDim: theme.textSecondary };
+}
+
+function DebugText(props: ComponentProps<typeof ThemedText>) {
+  return <ThemedText {...props} style={[props.style, Platform.OS !== 'web' && { fontSize: 13, lineHeight: 22 }]} />;
+}
+
 function TerminalLogEntry({
   snapshot,
   expanded,
@@ -111,17 +122,20 @@ function TerminalLogEntry({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const theme = useTheme();
+  const C = useDebugPalette();
   const [copied, setCopied] = useState(false);
   const tag = getDebugRequestCategory(snapshot.purpose);
   const hasResponse = Boolean(snapshot.responseContent);
   const hasReasoning = Boolean(snapshot.reasoningContent);
   const hasError = Boolean(snapshot.error);
   const purpose = getPurposeLabel(snapshot.purpose);
-  const accent = tagColor(tag);
+  const accent = tagColor(tag, C);
 
   const pending = snapshot.status === 'pending';
   const cancelled = snapshot.status === 'cancelled';
   const statusIcon = pending ? '[RUN]' : cancelled ? '[STOP]' : hasError ? '[ERR]' : '[OK ]';
+  const statusLabel = pending ? '进行中' : cancelled ? '已停止' : hasError ? '失败' : '已完成';
   const statusColor = pending || cancelled ? C.amber : hasError ? C.red : C.green;
 
   const handleCopy = useCallback(async () => {
@@ -135,20 +149,22 @@ function TerminalLogEntry({
       onPress={onToggle}
       style={({ pressed }) => [
         styles.logEntry,
+        Platform.OS !== 'web' && styles.mobileLogEntry,
         {
-          backgroundColor: pressed ? C.surfaceHover : C.surface,
+          backgroundColor: pressed ? theme.surfaceVariant : theme.surface,
           borderLeftColor: hasError ? C.red : accent,
+          borderColor: C.border,
         },
       ]}>
       {/* Header line */}
       <View style={styles.logHeader}>
         <View style={styles.logStatusGroup}>
-          <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 11 }}>
+          <DebugText type="code" style={{ color: C.whiteDim, fontSize: 11 }}>
             [{timeLabel(snapshot.at)}]
-          </ThemedText>
-          <ThemedText type="code" style={{ color: statusColor, fontSize: 11, fontWeight: '700' }}>
-            {statusIcon}
-          </ThemedText>
+          </DebugText>
+          <DebugText type="code" style={{ color: statusColor, fontSize: 11, fontWeight: '700' }}>
+            {Platform.OS === 'web' ? statusIcon : statusLabel}
+          </DebugText>
           <Pressable
             onPress={(event) => {
               event.stopPropagation();
@@ -156,9 +172,9 @@ function TerminalLogEntry({
             }}
             hitSlop={6}
             style={({ pressed }) => [styles.copyButton, { opacity: pressed ? 0.55 : 1 }]}>
-            <ThemedText type="code" style={{ color: copied ? C.green : C.cyan, fontSize: 10, fontWeight: '700' }}>
+            <DebugText type="code" style={{ color: copied ? C.green : C.cyan, fontSize: 10, fontWeight: '700' }}>
               {copied ? '[COPIED]' : '[COPY]'}
-            </ThemedText>
+            </DebugText>
           </Pressable>
         </View>
       </View>
@@ -166,63 +182,63 @@ function TerminalLogEntry({
       {/* Model line */}
       <View style={styles.logMeta}>
         {snapshot.providerName ? (
-          <ThemedText
+          <DebugText
             type="code"
             style={{ color: C.cyan, fontSize: 11, fontWeight: '700' }}
             numberOfLines={1}>
             {snapshot.providerName}
-          </ThemedText>
+          </DebugText>
         ) : null}
-        <ThemedText
+        <DebugText
           type="code"
           style={{ color: C.greenDim, fontSize: 11 }}
           numberOfLines={1}>
           {snapshot.model}
-        </ThemedText>
-        <ThemedText type="code" style={{ color: accent, fontSize: 10 }}>
+        </DebugText>
+        <DebugText type="code" style={{ color: accent, fontSize: 10 }}>
           {purpose}
-        </ThemedText>
-        <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
+        </DebugText>
+        <DebugText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
           {snapshot.streaming ? '| stream' : '| sync'}
-        </ThemedText>
+        </DebugText>
       </View>
 
       {/* One-liner summary */}
       <View style={styles.logMeta}>
-        <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
+        <DebugText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
           {snapshot.steps ? `steps:${snapshot.steps.length}` : `msgs:${snapshot.messages.length}`}
-        </ThemedText>
+        </DebugText>
         {hasResponse && (
-          <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
+          <DebugText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
             out:{snapshot.responseContent!.length}ch
-          </ThemedText>
+          </DebugText>
         )}
         {hasReasoning && (
-          <ThemedText type="code" style={{ color: C.cyanMuted, fontSize: 10 }}>
+          <DebugText type="code" style={{ color: C.cyanMuted, fontSize: 10 }}>
             think:{snapshot.reasoningContent!.length}ch
-          </ThemedText>
+          </DebugText>
         )}
         {snapshot.finishReason && (
-          <ThemedText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
+          <DebugText type="code" style={{ color: C.whiteDim, fontSize: 10 }}>
             {snapshot.finishReason}
-          </ThemedText>
+          </DebugText>
         )}
         {snapshot.responseTokens && (
-          <ThemedText type="code" style={{ color: C.greenDim, fontSize: 10 }}>
+          <DebugText type="code" style={{ color: C.greenDim, fontSize: 10 }}>
             tok:{snapshot.responseTokens.promptTokens ?? '?'}/
             {snapshot.responseTokens.completionTokens ?? '?'}
-          </ThemedText>
+          </DebugText>
         )}
-        <ThemedText type="code" style={{ color: expanded ? C.green : C.greenDim, fontSize: 10 }}>
-          {expanded ? '▲' : '▼'}
-        </ThemedText>
+        <DebugText type="code" style={{ color: expanded ? C.green : C.greenDim, fontSize: 10 }}>
+          {Platform.OS === 'web' ? (expanded ? '▲' : '▼') : (expanded ? '收起' : '详情')}
+        </DebugText>
       </View>
 
       {snapshot.phase ? (
-        <ThemedText type="code" style={{ color: statusColor, fontSize: 11 }}>
+        <DebugText type="code" style={{ color: statusColor, fontSize: 11 }}>
           {snapshot.phase}{snapshot.durationMs !== undefined ? ` · ${(snapshot.durationMs / 1000).toFixed(1)}s` : ''}
           {snapshot.promptId ? ` · prompt_id: ${snapshot.promptId}` : ''}
-        </ThemedText>
+        </DebugText>
       ) : null}
 
       {/* Expanded detail */}
@@ -230,44 +246,44 @@ function TerminalLogEntry({
         <View style={styles.expandedArea}>
           {hasError && (
             <View style={[styles.logBlock, { borderLeftColor: C.red }]}>
-              <ThemedText type="code" style={{ color: C.red, marginBottom: 4 }}>
+              <DebugText type="code" style={{ color: C.red, marginBottom: 4 }}>
                 ## error
-              </ThemedText>
-              <ThemedText type="code" style={{ color: C.redDim }} selectable>
+              </DebugText>
+              <DebugText type="code" style={{ color: C.redDim }} selectable>
                 {snapshot.error}
-              </ThemedText>
+              </DebugText>
             </View>
           )}
 
           {/* Messages */}
           {snapshot.messages.length > 0 && <View style={styles.logBlock}>
-            <ThemedText type="code" style={{ color: C.green, marginBottom: 4 }}>
+            <DebugText type="code" style={{ color: C.green, marginBottom: 4 }}>
               ## request ({snapshot.messages.length} messages)
-            </ThemedText>
+            </DebugText>
             {snapshot.messages.map((message, index) => (
               <View key={`${message.role}-${index}`} style={styles.msgLine}>
-                <ThemedText type="code" style={{ color: C.amber, marginBottom: 2 }}>
+                <DebugText type="code" style={{ color: C.amber, marginBottom: 2 }}>
                   [{index}] {message.role} ({message.content.length}ch)
-                </ThemedText>
-                <ThemedText type="code" style={{ color: C.whiteDim }} selectable>
+                </DebugText>
+                <DebugText type="code" style={{ color: C.whiteDim }} selectable>
                   {message.content}
-                </ThemedText>
+                </DebugText>
               </View>
             ))}
           </View>}
 
           {snapshot.steps && (
             <View style={{ gap: 12 }}>
-              <ThemedText type="code" style={{ color: C.cyan }}>
+              <DebugText type="code" style={{ color: C.cyan }}>
                 ## 生图调用链路 · 密钥与图片数据已省略
-              </ThemedText>
+              </DebugText>
               {snapshot.steps.length === 0 ? (
-                <ThemedText type="code" style={{ color: C.whiteDim }}>尚未发出 HTTP 请求</ThemedText>
+                <DebugText type="code" style={{ color: C.whiteDim }}>尚未发出 HTTP 请求</DebugText>
               ) : snapshot.steps.map((step) => (
                 <View key={step.id} style={[styles.logBlock, { borderLeftColor: step.status === 'error' ? C.red : C.cyan }]}>
-                  <ThemedText type="code" style={{ color: C.whiteDim }} selectable>
+                  <DebugText type="code" style={{ color: C.whiteDim }} selectable>
                     {formatImageDebugStep(step)}
-                  </ThemedText>
+                  </DebugText>
                 </View>
               ))}
             </View>
@@ -276,24 +292,24 @@ function TerminalLogEntry({
           {/* Provider thinking/reasoning, kept separate from the generated prose. */}
           {hasReasoning && (
             <View style={[styles.logBlock, { borderLeftColor: C.cyan }]}>
-              <ThemedText type="code" style={{ color: C.cyan, marginBottom: 4 }}>
+              <DebugText type="code" style={{ color: C.cyan, marginBottom: 4 }}>
                 ## thinking ({snapshot.reasoningContent!.length}ch)
-              </ThemedText>
-              <ThemedText type="code" style={{ color: C.cyanMuted }} selectable>
+              </DebugText>
+              <DebugText type="code" style={{ color: C.cyanMuted }} selectable>
                 {snapshot.reasoningContent}
-              </ThemedText>
+              </DebugText>
             </View>
           )}
 
           {/* Response */}
           {hasResponse && (
             <View style={styles.logBlock}>
-              <ThemedText type="code" style={{ color: C.green, marginBottom: 4 }}>
+              <DebugText type="code" style={{ color: C.green, marginBottom: 4 }}>
                 ## response ({snapshot.responseContent!.length}ch)
-              </ThemedText>
-              <ThemedText type="code" style={{ color: C.white }} selectable>
+              </DebugText>
+              <DebugText type="code" style={{ color: C.white }} selectable>
                 {snapshot.responseContent}
-              </ThemedText>
+              </DebugText>
             </View>
           )}
         </View>
@@ -305,6 +321,7 @@ function TerminalLogEntry({
 // ── Main page ──
 
 export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
+  const theme = useTheme();
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -379,15 +396,33 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
     image: allSnapshots.filter((s) => getDebugRequestCategory(s.purpose) === 'image').length,
   };
 
+  if (Platform.OS !== 'web') return <View style={{ flex: 1, backgroundColor: theme.background }}>
+    <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
+      <View style={[mobileStyles.content, { paddingBottom: 12 }]}>
+        <MobilePageIntro title="调试" subtitle={`${allSnapshots.length} 条请求记录 · ${debugEnabled ? '正在记录' : '记录已关闭'}`} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+          <MobileAction label={debugEnabled ? '暂停记录' : '开始记录'} onPress={() => updateGenerationSettings({ debugPromptInspectorEnabled: !debugEnabled })} />
+          <MobileAction label="清空记录" variant="text" disabled={!allSnapshots.length} onPress={() => void handleClear()} />
+          <MobileAction label="全部收起" variant="text" disabled={!expandedIds.size} onPress={handleCollapseAll} />
+        </View>
+        <MobileSegmentedTabs value={filter ?? 'all'} onChange={value => setFilter(value === 'all' ? null : value)} items={[{ value: 'all', label: '全部' }, ...CATEGORY_FILTERS.map(item => ({ value: item.key, label: item.label }))]} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><ThemedText type="small" themeColor="textSecondary">{filteredSnapshots.length} 条记录</ThemedText><MobileAction label={`自动跟随：${autoScroll ? '开' : '关'}`} variant="text" onPress={() => setAutoScroll(!autoScroll)} /></View>
+      </View>
+      <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={[mobileStyles.content, { paddingTop: 0 }]} onScrollBeginDrag={() => setAutoScroll(false)}>
+        {filteredSnapshots.length ? filteredSnapshots.map((snapshot, index) => <TerminalLogEntry key={snapshot.id ?? `${snapshot.at}-${index}`} snapshot={snapshot} expanded={expandedIds.has(snapshot.id ?? `${snapshot.at}-${index}`)} onToggle={() => handleToggle(snapshot.id ?? `${snapshot.at}-${index}`)} />) : <MobileEmptyState title="暂无请求记录" description={debugEnabled ? '执行写作、AI 补全或生图后，在这里查看请求详情与结果。' : '开启记录后，新的模型请求会显示在这里。'} icon={{ ios: 'doc.text.magnifyingglass', android: 'find_in_page', web: 'find_in_page' }} />}
+      </ScrollView>
+    </SafeAreaView>
+  </View>;
+
   return (
-    <View style={[styles.container, { backgroundColor: C.bg }]}> 
+    <View style={[styles.container, { backgroundColor: Platform.OS === 'web' ? C.bg : theme.background }, Platform.OS !== 'web' && styles.mobileContainer]}>
       <SafeAreaView
         style={styles.safeArea}
         edges={embedded ? ['top', 'left', 'right'] : ['left', 'right']}>
       {!embedded ? <Stack.Screen options={{ headerShown: false }} /> : null}
-      <View style={styles.consoleDeck}>
+      <View style={[styles.consoleDeck, Platform.OS !== 'web' && { backgroundColor: theme.background }]}>
       {/* Status bar */}
-      <View style={[styles.statusBar, { borderBottomColor: C.border }]}> 
+      <View style={[styles.statusBar, { borderBottomColor: C.border }, Platform.OS !== 'web' && styles.mobileStatusCard]}>
         {!embedded ? (
           <Pressable
             onPress={() => (router.canGoBack() ? router.back() : router.replace('/settings'))}
@@ -397,7 +432,7 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
           </Pressable>
         ) : null}
         <View style={[styles.liveIndicator, { backgroundColor: debugEnabled ? C.green : C.amber }]} />
-        <ThemedText type="code" style={styles.archiveTitle}>LIVE REQUEST ARCHIVE</ThemedText>
+        <ThemedText type="code" style={styles.archiveTitle}>{Platform.OS === 'web' ? 'LIVE REQUEST ARCHIVE' : '调试 · 请求记录'}</ThemedText>
         <ThemedText type="code" style={styles.archiveCount}>{filteredSnapshots.length} / {allSnapshots.length}</ThemedText>
         <View style={{ flex: 1 }} />
         {!debugEnabled ? (
@@ -405,16 +440,16 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
             onPress={() => updateGenerationSettings({ debugPromptInspectorEnabled: true })}
             hitSlop={8}
             style={({ pressed }) => [styles.statusAction, pressed && styles.actionPressed]}>
-            <ThemedText type="code" style={[styles.statusActionText, { color: C.amber }]}>START RECORDING</ThemedText>
+              <ThemedText type="code" style={[styles.statusActionText, { color: C.amber }]}>{Platform.OS === 'web' ? 'START RECORDING' : '启动记录'}</ThemedText>
           </Pressable>
         ) : null}
         {allSnapshots.length > 0 ? (
           <>
             <Pressable onPress={handleCollapseAll} hitSlop={8} style={({ pressed }) => [styles.statusAction, pressed && styles.actionPressed]}>
-              <ThemedText type="code" style={styles.statusActionText}>COLLAPSE</ThemedText>
+              <ThemedText type="code" style={styles.statusActionText}>{Platform.OS === 'web' ? 'COLLAPSE' : '全部收起'}</ThemedText>
             </Pressable>
             <Pressable onPress={handleClear} hitSlop={8} style={({ pressed }) => [styles.statusAction, pressed && styles.actionPressed]}>
-              <ThemedText type="code" style={[styles.statusActionText, { color: C.red }]}>CLEAR</ThemedText>
+              <ThemedText type="code" style={[styles.statusActionText, { color: C.red }]}>{Platform.OS === 'web' ? 'CLEAR' : '清空'}</ThemedText>
             </Pressable>
           </>
         ) : null}
@@ -422,20 +457,20 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
           <ThemedText
             type="code"
             style={{ color: autoScroll ? C.green : C.greenDim, fontSize: 9 }}>
-            AUTO FOLLOW · {autoScroll ? 'ON' : 'OFF'}
+            {Platform.OS === 'web' ? `AUTO FOLLOW · ${autoScroll ? 'ON' : 'OFF'}` : `自动跟随 · ${autoScroll ? '开' : '关'}`}
           </ThemedText>
         </Pressable>
       </View>
 
       {/* Filter tabs */}
-      <View style={[styles.filterRow, { borderBottomColor: C.border }]}>
+      <View style={[styles.filterRow, { borderBottomColor: C.border }, Platform.OS !== 'web' && styles.mobileFilterRow]}>
         <ScrollView
           horizontal
           style={styles.filterScroll}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterRowContent}>
           <ThemedText type="code" style={{ color: C.greenDim, fontSize: 10 }}>
-            FILTER:
+            {Platform.OS === 'web' ? 'FILTER:' : '筛选'}
           </ThemedText>
           {[null, ...CATEGORY_FILTERS].map((category) => {
             const active = filter === (category === null ? null : category.key);
@@ -456,6 +491,7 @@ export function DebugScreen({ embedded = false }: { embedded?: boolean }) {
                 onPress={() => setFilter(category === null ? null : category.key)}
                 style={[
                   styles.filterChip,
+                  Platform.OS !== 'web' && styles.mobileFilterChip,
                   {
                     borderColor: active ? fc : C.border,
                     backgroundColor: active
@@ -548,6 +584,11 @@ export default DebugScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  mobileContainer: { paddingHorizontal: 12 },
+  mobileStatusCard: { minHeight: 72, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderRadius: 12, borderBottomWidth: 1, marginBottom: 12 },
+  mobileFilterRow: { borderBottomWidth: 0, paddingVertical: 0, marginBottom: 12 },
+  mobileFilterChip: { minHeight: 48, paddingHorizontal: 16, borderRadius: 12, justifyContent: 'center' },
+  mobileLogEntry: { borderLeftWidth: 3, borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 12 },
   safeArea: { flex: 1, zIndex: 1 },
   actionPressed: { opacity: 0.6, transform: [{ translateY: 1 }] },
   consoleDeck: {
@@ -569,7 +610,7 @@ const styles = StyleSheet.create({
   liveIndicator: { width: 7, height: 7, borderRadius: 4 },
   archiveTitle: { color: '#3D433F', fontSize: 9, letterSpacing: 1.1, fontWeight: '800' },
   archiveCount: { color: '#81766D', fontSize: 9 },
-  statusAction: { minHeight: 26, justifyContent: 'center', paddingHorizontal: 3 },
+  statusAction: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 8 },
   statusActionText: { color: C.greenDim, fontSize: 8, letterSpacing: 0.7 },
   enableDebugButton: {
     marginTop: 18,
@@ -598,6 +639,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   filterChip: {
+    minHeight: 40,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 10,
@@ -668,6 +710,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   copyButton: {
+    minHeight: Platform.OS === 'web' ? undefined : 48,
+    minWidth: Platform.OS === 'web' ? undefined : 48,
+    justifyContent: 'center',
     paddingHorizontal: 3,
     paddingVertical: 2,
   },

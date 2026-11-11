@@ -1,6 +1,8 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { Pressable, SafeAreaView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
 import { NovelSceneInspirationPanel } from '@/components/NovelSceneInspirationModal';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
@@ -14,10 +16,10 @@ export default function NovelInspirationScreen() {
   const { width } = useWindowDimensions();
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   if (!novel) return <View style={[styles.center, { backgroundColor: theme.background }]}><ThemedText>小说不存在。</ThemedText></View>;
-  return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+  return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>{Platform.OS !== 'web' ? <NovelMobileNavigation novelId={novel.id} title="灵感对话" /> : null}
     <View style={[styles.content, { paddingHorizontal: width < 640 ? 16 : Spacing.four }]}>
-    <View style={styles.topbar}><Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={() => router.back()} hitSlop={10}><ThemedText type="code" themeColor="accent">← 返回作品</ThemedText></Pressable><ThemedText type="code" themeColor="textMuted" numberOfLines={1} style={styles.breadcrumb}>灵感工作台 / {novel.name}</ThemedText></View>
-    <View style={styles.heading}><ThemedText type="title" style={styles.headingTitle}>灵感对话</ThemedText><ThemedText type="small" themeColor="textSecondary" style={styles.headingCopy}>围绕当前作品讨论剧情、场景和写法；回复会保存到本地。</ThemedText></View>
+    {Platform.OS === 'web' ? <View style={styles.topbar}><Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={() => router.back()} hitSlop={10}><ThemedText type="code" themeColor="accent">← 返回作品</ThemedText></Pressable><ThemedText type="code" themeColor="textMuted" numberOfLines={1} style={styles.breadcrumb}>灵感工作台 / {novel.name}</ThemedText></View> : null}
+    {Platform.OS === 'web' ? <View style={styles.heading}><ThemedText type="title" style={styles.headingTitle}>灵感对话</ThemedText><ThemedText type="small" themeColor="textSecondary" style={styles.headingCopy}>围绕当前作品讨论剧情、场景和写法；回复会保存到本地。</ThemedText></View> : null}
     <NovelSceneInspirationPanel
       embedded
       novel={novel}
@@ -35,4 +37,4 @@ export default function NovelInspirationScreen() {
   </SafeAreaView>;
 }
 
-const styles = StyleSheet.create({ safeArea: { flex: 1 }, content: { flex: 1 }, breadcrumb: { flexShrink: 1, textAlign: 'right', marginLeft: 16 }, topbar: { minHeight: 52, width: '100%', maxWidth: 960, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, heading: { width: '100%', maxWidth: 960, alignSelf: 'center', gap: Spacing.one, paddingTop: Spacing.three, paddingBottom: Spacing.four }, headingTitle: { fontSize: 38, lineHeight: 44, letterSpacing: -0.8 }, headingCopy: { maxWidth: 560 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ safeArea: { flex: 1 }, content: { flex: 1 }, breadcrumb: { flexShrink: 1, textAlign: 'right', marginLeft: 16 }, topbar: { minHeight: 52, width: '100%', maxWidth: 960, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, heading: { width: '100%', maxWidth: 960, alignSelf: 'center', gap: Spacing.one, paddingTop: Spacing.three, paddingBottom: Spacing.three }, headingTitle: { fontSize: 28, lineHeight: 36, letterSpacing: -0.4 }, headingCopy: { maxWidth: 560, lineHeight: 23 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' } });

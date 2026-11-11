@@ -600,7 +600,7 @@ function SafeAreaContainer({
   children: ReactNode;
 }) {
   return (
-    <View style={[styles.safeArea, { paddingTop: insets.top + 40 }]}>{children}</View>
+    <View style={[styles.safeArea, { paddingTop: insets.top + 20 }]}>{children}</View>
   );
 }
 
@@ -658,8 +658,8 @@ const styles = StyleSheet.create({
   },
   sheet: {
     flex: 1,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
@@ -676,7 +676,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
+    paddingVertical: Spacing.three,
   },
   headerText: {
     gap: 2,
@@ -688,7 +688,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   bodyContent: {
-    padding: Spacing.three,
+    padding: Spacing.four,
     gap: Spacing.three,
   },
   actions: {
@@ -697,9 +697,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   actionButton: {
-    minHeight: 40,
+    minHeight: 48,
     paddingHorizontal: Spacing.three,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',

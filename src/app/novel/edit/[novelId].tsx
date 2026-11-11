@@ -15,6 +15,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NovelImagePickerField } from '@/components/NovelImagePickerField';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
+import { mobileStyles } from '@/components/mobile/MobileUI';
 import { NovelVideoPickerField } from '@/components/NovelVideoPickerField';
 import { QuickTravelWorldDraftEditor } from '@/components/QuickTravelWorldDraftEditor';
 import { NovelCastEditor } from '@/components/novel-create/NovelCastEditor';
@@ -278,16 +280,17 @@ function LegacyEditNovelScreen() {
   }
 
   return (
-    <ThemedView decorated style={styles.container}>
+    <ThemedView decorated={Platform.OS === 'web'} style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.flex}>
+          {Platform.OS !== 'web' ? <NovelMobileNavigation novelId={novel.id} title="作品设定" /> : null}
           <ScrollView
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.content}>
-            <View style={styles.header}>
+            contentContainerStyle={[styles.content, Platform.OS !== 'web' && mobileStyles.content]}>
+            {Platform.OS === 'web' ? <View style={styles.header}>
               <Pressable onPress={handleBack} style={styles.backButton}>
                 <ThemedText type="small" themeColor="accent">
                   返回
@@ -302,7 +305,7 @@ function LegacyEditNovelScreen() {
               <ThemedText themeColor="textSecondary">
                 修改基础设定与世界观后保存。不会清空聊天记录。
               </ThemedText>
-            </View>
+            </View> : null}
 
             <FormSection title="基础设定">
               <NovelImagePickerField
@@ -549,7 +552,7 @@ function FormSection({ title, children }: FormSectionProps) {
   const theme = useTheme();
 
   return (
-    <ThemedView type="surface" style={[styles.section, { borderColor: theme.border }]}>
+    <ThemedView type="surface" style={[styles.section, { borderColor: theme.border }, Platform.OS !== 'web' && { borderWidth: 0, borderRadius: 0, padding: 0, paddingBottom: 16, backgroundColor: 'transparent', gap: 20 }]}>
       <ThemedText style={[styles.sectionTitle, { color: theme.accent }]}>{title}</ThemedText>
       {children}
     </ThemedView>
@@ -640,12 +643,12 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
   },
   title: {
-    fontSize: 36,
-    lineHeight: 40,
+    fontSize: 28,
+    lineHeight: 36,
   },
   section: {
     borderWidth: 1,
-    borderRadius: 24,
+    borderRadius: 12,
     padding: Spacing.three,
     gap: Spacing.three,
   },
@@ -662,7 +665,7 @@ const styles = StyleSheet.create({
   },
   syncPromptButton: {
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 12,
     minHeight: 40,
     paddingHorizontal: Spacing.three,
     alignItems: 'center',
@@ -681,7 +684,7 @@ const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 12,
     minHeight: 48,
     paddingHorizontal: Spacing.three,
     fontSize: 16,
@@ -699,7 +702,7 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     minHeight: 52,
-    borderRadius: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { WorkbenchPanel } from '@/components/novel-continue/WorkbenchPanel';
 import { ThemedText } from '@/components/themed-text';
@@ -38,6 +38,8 @@ const KIND_LABEL: Record<string, string> = {
 
 export function ConsistencyPanel({ novelId }: { novelId: string }) {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const mobile = width < 600;
   const [issues, setIssues] = useState<ConsistencyIssueRow[]>([]);
   const [runs, setRuns] = useState<ConsistencyAuditRunRow[]>([]);
   const [candidates, setCandidates] = useState<MergeCandidate[]>([]);
@@ -132,7 +134,7 @@ export function ConsistencyPanel({ novelId }: { novelId: string }) {
         {loading ? (
           <ActivityIndicator color={theme.accent} />
         ) : (
-          <View style={styles.summaryRow}>
+            <View style={[styles.summaryRow, mobile && styles.mobileSummaryRow]}>
             <SummaryMetric label="严重" value={counts.critical} color={theme.error} />
             <SummaryMetric label="警告" value={counts.warning} color={theme.warning} />
             <SummaryMetric label="待合并" value={counts.merges} color={theme.accent} />
@@ -175,7 +177,7 @@ export function ConsistencyPanel({ novelId }: { novelId: string }) {
             ))}
             {issue.suggestion ? <ThemedText type="small" themeColor="textMuted">建议：{issue.suggestion}</ThemedText> : null}
             {issue.status === 'open' || issue.status === 'acknowledged' ? (
-              <View style={styles.actions}>
+                <View style={[styles.actions, mobile && styles.mobileActions]}>
                 {issue.status === 'open' ? <ActionButton label="确认" disabled={busyId === issue.id} onPress={() => void changeStatus(issue, 'acknowledged')} /> : null}
                 <ActionButton label="解决" disabled={busyId === issue.id} onPress={() => void changeStatus(issue, 'resolved')} />
                 <ActionButton label="标记失效" disabled={busyId === issue.id} onPress={() => void changeStatus(issue, 'superseded')} />
@@ -191,7 +193,7 @@ export function ConsistencyPanel({ novelId }: { novelId: string }) {
           <View key={candidate.id} style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
             <ThemedText type="smallBold">{candidate.secondaryEntityId} → {candidate.primaryEntityId}</ThemedText>
             <ThemedText type="small" themeColor="textMuted">置信度 {Math.round(candidate.confidence * 100)}%</ThemedText>
-            <View style={styles.actions}>
+            <View style={[styles.actions, mobile && styles.mobileActions]}>
               <ActionButton label="接受合并" disabled={busyId === candidate.id} onPress={() => void decideMerge(candidate, 'accepted')} />
               <ActionButton label="拒绝" disabled={busyId === candidate.id} onPress={() => void decideMerge(candidate, 'rejected')} />
             </View>
@@ -240,13 +242,15 @@ function ActionButton({ label, disabled, onPress }: { label: string; disabled: b
 const styles = StyleSheet.create({
   stack: { gap: Spacing.three },
   summaryRow: { flexDirection: 'row', gap: Spacing.two },
+  mobileSummaryRow: { gap: 8 },
   metric: { flex: 1, alignItems: 'center', gap: Spacing.one },
   card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 14, padding: Spacing.three, gap: Spacing.two },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: Spacing.two },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
   chip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 999, paddingHorizontal: Spacing.two, paddingVertical: 2 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  button: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
+  mobileActions: { gap: 8 },
+  button: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, justifyContent: 'center' },
   disabled: { opacity: 0.45 },
   filter: { flexDirection: 'row', borderRadius: 10, padding: 2 },
   filterItem: { borderRadius: 8, paddingHorizontal: Spacing.two, paddingVertical: Spacing.one },

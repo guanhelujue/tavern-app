@@ -1,6 +1,6 @@
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
@@ -24,6 +24,8 @@ export function ForecastStep({
   onOutlineGenerated?: (outlineReady: boolean) => void;
 }) {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const mobile = width < 600;
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const createNovelForecast = useTavernStore((state) => state.createNovelForecast);
   const selectNovelForecastRoute = useTavernStore((state) => state.selectNovelForecastRoute);
@@ -158,7 +160,7 @@ export function ForecastStep({
                 key={route.routeId}
                 onPress={() => handleSelect(latestActive, route)}
                 style={[
-                  styles.routeCard,
+                  [styles.routeCard, mobile && styles.mobileRouteCard],
                   {
                     backgroundColor: theme.surface,
                     borderColor: isSelected ? theme.accent : theme.border,
@@ -260,6 +262,7 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     gap: Spacing.one,
   },
+  mobileRouteCard: { borderRadius: 12, padding: 16 },
   routeHeader: {
     flexDirection: 'row',
     alignItems: 'center',

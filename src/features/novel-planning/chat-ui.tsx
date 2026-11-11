@@ -4,8 +4,8 @@ import { Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 const palettes = {
-  light: { background: '#fcfcfd', surface: '#ffffff', subtle: '#f3f4f6', text: '#202124', muted: '#6b6e76', border: '#e5e6eb', accent: '#4667e8', accentMuted: '#eff3ff', onAccent: '#ffffff', error: '#bd3039' },
-  dark: { background: '#191a1d', surface: '#232428', subtle: '#2b2c31', text: '#ededf0', muted: '#a3a5ad', border: '#3a3b42', accent: '#97aaff', accentMuted: '#2c3552', onAccent: '#171d35', error: '#ff9aa3' },
+  light: { background: '#F7F4EF', surface: '#FFFCF8', subtle: '#F0E0D2', text: '#211C18', muted: '#625B55', border: '#D9D1C8', accent: '#79543A', accentMuted: '#F0E0D2', onAccent: '#FFFFFF', error: '#B3261E' },
+  dark: { background: '#12100F', surface: '#1A1816', subtle: '#553924', text: '#EEE9E4', muted: '#C8C0B8', border: '#4D4640', accent: '#D5AE8C', accentMuted: '#553924', onAccent: '#3F2717', error: '#FFB4AB' },
 };
 
 export function usePlanningPalette() { return palettes[useColorScheme()]; }
@@ -67,7 +67,7 @@ const ui = StyleSheet.create({
   text: { fontFamily: Fonts.sans, fontSize: 15, lineHeight: 24, fontWeight: '400' },
   button: { minHeight: 40, paddingHorizontal: 15, paddingVertical: 8, borderWidth: 1, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   buttonLabel: { fontSize: 13, lineHeight: 22, fontWeight: '500' }, dim: { opacity: 0.45 },
-  composer: { width: '100%', borderWidth: 1, borderRadius: 26, padding: 14, gap: 10, boxShadow: '0 6px 24px rgba(20, 24, 36, 0.035)' },
+  composer: { width: '100%', borderWidth: 1, borderRadius: 14, padding: 14, gap: 10, boxShadow: '0 6px 24px rgba(64, 40, 24, 0.06)' },
   composerInput: { fontFamily: Fonts.sans, fontSize: 16, lineHeight: 25, paddingHorizontal: 5, paddingTop: 4, paddingBottom: 4, textAlignVertical: 'top', outlineWidth: 0 },
   composerTools: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
   memoryLink: { minHeight: 34, borderRadius: 18, paddingHorizontal: 12, justifyContent: 'center' },

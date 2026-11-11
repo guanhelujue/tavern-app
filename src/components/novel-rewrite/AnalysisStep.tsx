@@ -1,6 +1,6 @@
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
@@ -21,6 +21,8 @@ export function AnalysisStep({
   nextLabel?: string | null;
 }) {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const mobile = width < 600;
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const analyzeNovelStoryState = useTavernStore((state) => state.analyzeNovelStoryState);
 
@@ -126,6 +128,7 @@ export function AnalysisStep({
       <View
         style={[
           styles.statusCard,
+          mobile && styles.mobileStatusCard,
           { backgroundColor: theme.surface, borderColor: theme.border },
         ]}>
         <ThemedText type="smallBold">分析进度</ThemedText>
@@ -240,6 +243,7 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     gap: Spacing.three,
   },
+  mobileStatusCard: { borderRadius: 12, padding: 16 },
   progressTrack: {
     height: 8,
     borderRadius: 4,
@@ -270,6 +274,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     borderRadius: 14,
+    minHeight: 48,
     paddingVertical: Spacing.three,
     alignItems: 'center',
   },

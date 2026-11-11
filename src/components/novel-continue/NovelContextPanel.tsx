@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 
 import { NovelStoryMemoryModal } from '@/components/NovelStoryMemoryModal';
 import { WorkbenchPanel } from '@/components/novel-continue/WorkbenchPanel';
@@ -13,6 +13,8 @@ import { useTavernStore } from '@/store/tavern-store';
 /** Chapter context and legacy conversation memory have separate consumers. */
 export function NovelContextPanel({ novelId }: { novelId: string }) {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const mobile = width < 600;
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const meta = useTavernStore((state) => state.novelConversationMeta[novelId]);
   const settings = novel ? resolveContinuationSettings(novel) : undefined;
@@ -42,12 +44,12 @@ export function NovelContextPanel({ novelId }: { novelId: string }) {
   return <View style={styles.stack}>
     <WorkbenchPanel title="章节写作上下文" subtitle="这些设置用于章节创作。修改后从下一次生成开始生效。">
       <ThemedText type="smallBold">回看已定稿正文（0–{NOVEL_LOOKBACK_MAX} 章）</ThemedText>
-      <TextInput accessibilityLabel="回看已定稿章数" value={lookback} onChangeText={setLookback} keyboardType="number-pad" style={inputStyle} />
+      <TextInput accessibilityLabel="回看已定稿章数" value={lookback} onChangeText={setLookback} keyboardType="number-pad" style={[inputStyle, mobile && styles.mobileInput]} />
       <ThemedText type="small" themeColor="textMuted">0 表示不附加近期多章正文片段；上一章衔接、摘要、人物与剧情状态仍会参与生成。</ThemedText>
       <ThemedText type="smallBold">剧情上下文预算（字符）</ThemedText>
-      <TextInput accessibilityLabel="剧情上下文字符预算" value={budget} onChangeText={setBudget} keyboardType="number-pad" style={inputStyle} />
+      <TextInput accessibilityLabel="剧情上下文字符预算" value={budget} onChangeText={setBudget} keyboardType="number-pad" style={[inputStyle, mobile && styles.mobileInput]} />
       <ThemedText type="small" themeColor="textMuted">用于裁剪剧情上下文，不是整个请求的 token 上限；人物与作品设定另行注入。</ThemedText>
-      <Pressable accessibilityRole="button" onPress={save} style={[styles.button, { backgroundColor: theme.primary }]}><ThemedText type="smallBold" style={{ color: theme.onPrimary }}>保存章节上下文设置</ThemedText></Pressable>
+      <Pressable accessibilityRole="button" onPress={save} style={[styles.button, mobile && styles.mobileButton, { backgroundColor: theme.primary }]}><ThemedText type="smallBold" style={{ color: theme.onPrimary }}>保存章节上下文设置</ThemedText></Pressable>
       {feedback ? <ThemedText accessibilityLiveRegion="polite" type="small">{feedback}</ThemedText> : null}
     </WorkbenchPanel>
 
@@ -81,6 +83,8 @@ export function NovelContextPanel({ novelId }: { novelId: string }) {
 
 const styles = StyleSheet.create({
   stack: { gap: 20 }, input: { borderWidth: 1, borderRadius: 6, padding: 12, minHeight: 44, maxWidth: 320 },
+  mobileInput: { minHeight: 48, borderRadius: 12, fontSize: 16 },
   button: { minHeight: 44, borderRadius: 6, paddingHorizontal: 16, paddingVertical: 12, alignSelf: 'flex-start', justifyContent: 'center' },
+  mobileButton: { minHeight: 48, borderRadius: 12 },
   links: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
 });

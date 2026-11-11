@@ -228,7 +228,7 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
     </ScrollView> : desktop ? <ScrollView style={styles.overview} contentContainerStyle={styles.overviewContent} keyboardShouldPersistTaps="handled">
       {Boolean(legacy.length > 0 || activeJob || pausedJob || error) && <View style={styles.overviewNotices}>{notices}</View>}
       <ChapterBookSlips chapters={chapters} locked={busy} onCreate={() => openChapter('new')} onOpen={openChapter} />
-    </ScrollView> : <NovelMobileChapterHome name={novel.name} worldName={novel.worldName} chapters={chapters} plannedCount={plannedCount}
+    </ScrollView> : <NovelMobileChapterHome name={novel.name} worldName={novel.worldName} coverUri={novel.coverImageUri} chapters={chapters} plannedCount={plannedCount}
       nextIndex={manualIndex} nextTitle={nextOutline?.title} busy={busy} locked={locked}
       notices={legacy.length > 0 || activeJob || pausedJob || error ? notices : undefined}
       onOpen={openChapter} onCreate={() => openChapter('new')} onImport={() => setImportOpen(true)}
@@ -247,6 +247,7 @@ function ChapterForm({ chapter, nextIndex, initialPrompt, initialTitle, defaultT
   const desktop = useDesktopLayout();
   const [draft, setDraft] = useState<Draft>(() => ({ title: chapter?.title ?? initialTitle, goal: chapter?.goal ?? initialPrompt, summary: chapter?.summary ?? '', content: chapter?.content ?? '', planning: normalizeChapterPlanning(chapter?.planning), targetWords: chapter?.targetWords }));
   const [planningOpen, setPlanningOpen] = useState(hasChapterPlanning(chapter?.planning));
+  const [promptOpen, setPromptOpen] = useState(!chapter);
   const isDirty = (value: Draft) => value.title !== (chapter?.title ?? initialTitle) || value.goal !== (chapter?.goal ?? initialPrompt) || value.summary !== (chapter?.summary ?? '') || value.content !== (chapter?.content ?? '') || value.targetWords !== chapter?.targetWords || JSON.stringify(normalizeChapterPlanning(value.planning)) !== JSON.stringify(normalizeChapterPlanning(chapter?.planning));
   const dirty = isDirty(draft);
   const updateDraft = (next: Draft) => {
@@ -257,11 +258,12 @@ function ChapterForm({ chapter, nextIndex, initialPrompt, initialTitle, defaultT
   const targetWords = resolveChapterTargetWords(draft.targetWords, draft.goal, defaultTargetWords);
   const length = checkChapterLength(stream || draft.content, targetWords);
   const inputTheme = { color: theme.text, borderColor: theme.outlineVariant, backgroundColor: theme.background };
-  return <View style={[styles.paper, !desktop && { paddingHorizontal: 20 }, { backgroundColor: theme.surface, borderColor: theme.outlineVariant }]}>
+  return <View style={[styles.paper, { backgroundColor: theme.surface, borderColor: theme.outlineVariant }, !desktop && { paddingHorizontal: 0, paddingTop: 0, borderWidth: 0, borderRadius: 0, backgroundColor: 'transparent', shadowOpacity: 0, elevation: 0 }]}>
     <View style={styles.paperHeader}><ThemedText type="code" themeColor="primary">{chapter ? `第 ${chapter.index} 章 · ${chapter.status === 'final' ? '已定稿' : '草稿'}` : `新章节 · 第 ${nextIndex} 章`}</ThemedText><ThemedText type="small" themeColor="textMuted">{dirty ? '尚未保存' : chapter ? '已保存' : '开始写作'}</ThemedText></View>
     {Boolean(chapter && initialPrompt && initialPrompt !== chapter.goal) && <View style={[styles.notice, { backgroundColor: theme.primaryContainer }]}><ThemedText type="small" style={styles.noticeText}>带入的写作要求：{initialPrompt}</ThemedText><Action disabled={busy} onPress={() => update('goal', [draft.goal, initialPrompt].filter(Boolean).join('\n\n'))}>加入本章提示词</Action></View>}
     <TextInput accessibilityLabel="章节标题" value={draft.title} onChangeText={(value) => update('title', value)} editable={!busy} placeholder={`第${chapter?.index ?? nextIndex}章 · 输入章节标题`} placeholderTextColor={theme.textMuted} style={[styles.titleInput, { color: theme.text }]} />
-    <View style={[styles.promptSection, { borderColor: theme.outlineVariant }]}>
+    {!desktop ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: promptOpen }} onPress={() => setPromptOpen(!promptOpen)} style={[styles.planningToggle, { minHeight: 48, marginBottom: 12 }]}><ThemedText type="smallBold" themeColor="primary">本章提示词与规划</ThemedText><ThemedText themeColor="primary">{promptOpen ? '收起 −' : '展开 ＋'}</ThemedText></Pressable> : null}
+    {desktop || promptOpen ? <View style={[styles.promptSection, { borderColor: theme.outlineVariant }]}>
       <View style={styles.promptToolbar}>
         <View style={styles.promptToolbarCopy}>
           <ThemedText type="smallBold">本章提示词</ThemedText>
@@ -288,7 +290,7 @@ function ChapterForm({ chapter, nextIndex, initialPrompt, initialTitle, defaultT
         <ThemedText type="smallBold">{label}</ThemedText><TextInput accessibilityLabel={label} value={draft.planning?.[key] ?? ''} onChangeText={(value) => updateDraft({ ...draft, planning: { ...normalizeChapterPlanning(draft.planning), [key]: value } })} editable={!busy} multiline textAlignVertical="top" placeholder={placeholder} placeholderTextColor={theme.textMuted} style={[styles.summaryInput, inputTheme]} />
       </View>)}</View>}
       <View style={styles.promptActions}><ThemedText type="small" themeColor="textSecondary">{chapter ? '提示词与正文按章节一同保存。' : '生成时会结合已定稿章节、人物和大纲。'}</ThemedText>{!chapter && <Action primary disabled={busy} onPress={() => onGenerate(draft)}>{generating ? '正在生成…' : '生成本章正文'}</Action>}</View>
-    </View>
+    </View> : null}
     <View style={styles.sectionHeading}><ThemedText type="smallBold">章节正文</ThemedText><ThemedText type="code" themeColor="textMuted">{countChapterWords(stream || draft.content).toLocaleString()} / {targetWords} 字</ThemedText></View>
     {chapter?.targetWords && draft.content && !length.passed ? <ThemedText type="small" style={{ color: theme.error }}>字数不足：还需至少 {length.minimumWords - length.actualWords} 字，补足后才能定稿。</ThemedText> : null}
     <TextInput accessibilityLabel="章节正文" value={stream || draft.content} onChangeText={(value) => update('content', value)} editable={!busy} multiline textAlignVertical="top" placeholder="正文从这里开始。你可以直接写作，也可以先填写上方提示词，再生成本章内容。" placeholderTextColor={theme.textMuted} style={[styles.proseInput, { color: theme.text }]} />
@@ -303,12 +305,12 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, button: { minHeight: Platform.OS === 'web' ? 40 : 48, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderRadius: 7, justifyContent: 'center', alignItems: 'center' }, disabled: { opacity: 0.45 },
   compactHeader: { paddingHorizontal: 20, paddingVertical: 20 },
   overview: { flex: 1, minWidth: 0, width: '100%' }, overviewContent: { paddingBottom: 20, minWidth: 0 }, overviewNotices: { paddingHorizontal: 36, paddingBottom: 16, gap: 12 },
-  editorScroll: { flex: 1, minWidth: 0, width: '100%' }, editorContent: { padding: 36, gap: 18, maxWidth: 1160, width: '100%', alignSelf: 'center', paddingBottom: 72 }, compactEditorContent: { padding: 16, paddingBottom: 40 },
+  editorScroll: { flex: 1, minWidth: 0, width: '100%' }, editorContent: { padding: 36, gap: 18, maxWidth: 1160, width: '100%', alignSelf: 'center', paddingBottom: 72 }, compactEditorContent: { padding: 20, paddingBottom: 40 },
   notice: { padding: 16, borderRadius: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center' }, noticeText: { flex: 1, minWidth: 180, gap: 5 }, empty: { flex: 1, padding: 32, alignItems: 'center', justifyContent: 'center', gap: 16 },
-  paper: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 36, paddingTop: 28, paddingBottom: 8, shadowColor: '#4B3323', shadowOpacity: 0.06, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 1 }, paperHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'center' },
-  titleInput: { minWidth: 0, width: '100%', fontSize: 30, lineHeight: 40, fontWeight: '600', paddingVertical: 24, paddingHorizontal: 0, letterSpacing: -0.4 }, promptSection: { borderTopWidth: 1, borderBottomWidth: 1, paddingVertical: 22, marginBottom: 28, gap: 16 }, promptToolbar: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 16 }, promptToolbarCopy: { flex: 1, minWidth: 180, gap: 4 },
+  paper: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8, shadowColor: '#4B3323', shadowOpacity: 0.06, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 1 }, paperHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'center' },
+  titleInput: { minWidth: 0, width: '100%', fontSize: 26, lineHeight: 36, fontWeight: '600', paddingVertical: 20, paddingHorizontal: 0, letterSpacing: -0.3 }, promptSection: { borderTopWidth: 1, borderBottomWidth: 1, paddingVertical: 18, marginBottom: 24, gap: 16 }, promptToolbar: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 16 }, promptToolbarCopy: { flex: 1, minWidth: 180, gap: 4 },
   targetRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 14 }, targetCopy: { minWidth: 150, gap: 3 },
   sectionHeading: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between', alignItems: 'center' },
-  promptInput: { minWidth: 0, width: '100%', borderWidth: 1, borderRadius: 7, minHeight: 120, padding: 14, fontSize: 15, lineHeight: 25 }, promptActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' },
-  proseInput: { minWidth: 0, width: '100%', minHeight: 460, fontSize: 18, lineHeight: 34, paddingVertical: 22, paddingHorizontal: 0 }, summarySection: { paddingVertical: 20, borderTopWidth: 1, gap: 10 }, summaryInput: { minWidth: 0, width: '100%', minHeight: 70, borderWidth: 1, borderRadius: 7, padding: 12, fontSize: 14, lineHeight: 23 }, footer: { paddingVertical: 20, borderTopWidth: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 16 },
+  promptInput: { minWidth: 0, width: '100%', borderWidth: 1, borderRadius: 12, minHeight: 120, padding: 14, fontSize: 16, lineHeight: 26 }, promptActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' },
+  proseInput: { minWidth: 0, width: '100%', minHeight: 460, fontSize: 18, lineHeight: 32, paddingVertical: 22, paddingHorizontal: 0 }, summarySection: { paddingVertical: 20, borderTopWidth: 1, gap: 10 }, summaryInput: { minWidth: 0, width: '100%', minHeight: 70, borderWidth: 1, borderRadius: 12, padding: 12, fontSize: 16, lineHeight: 24 }, footer: { paddingVertical: 20, borderTopWidth: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 16 },
 });

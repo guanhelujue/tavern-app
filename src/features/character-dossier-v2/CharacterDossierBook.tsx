@@ -10,6 +10,7 @@ import {
 import {
   Animated,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -45,6 +46,7 @@ import {
   switchCharacterDossierVariant,
 } from './model';
 import { CharacterBiographyPage } from './CharacterBiographyPage';
+import { useTheme } from '@/hooks/use-theme';
 
 export type CharacterDossierBookPage = 'public' | 'private' | 'biography';
 
@@ -180,6 +182,43 @@ function PaperField({
           },
           visual.nocturne && styles.inputNocturne,
         ]}
+      />
+    </View>
+  );
+}
+
+function MobileDossierField({
+  label,
+  value,
+  placeholder,
+  multiline = false,
+  onChangeText,
+  onFocus,
+  onBlur,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  multiline?: boolean;
+  onChangeText: (value: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={styles.mobileField}>
+      <Text style={[styles.mobileFieldLabel, { color: theme.text }]}>{label}</Text>
+      <TextInput
+        accessibilityLabel={label}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        multiline={multiline}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        placeholder={placeholder}
+        placeholderTextColor={theme.textMuted}
+        style={[styles.mobileInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement }, multiline && styles.mobileInputMultiline]}
       />
     </View>
   );
@@ -501,6 +540,7 @@ export function CharacterDossierBook({
   onBiographyDelete,
 }: Props) {
   const { width } = useWindowDimensions();
+  const theme = useTheme();
   const motionEnabled = useTavernStore((state) => state.appearanceSettings.motionEnabled);
   const compact = width < 920;
   const visual =
@@ -660,6 +700,66 @@ export function CharacterDossierBook({
       ...dossier,
       private: { ...dossier.private, [key]: value },
     } as CharacterDossierV2);
+  }
+
+  if (Platform.OS !== 'web') {
+    return (
+      <DossierVisualContext.Provider value={visual}>
+        <View style={[styles.mobileRoot, { backgroundColor: theme.background }]}>
+          <View style={[styles.mobileIdentity, { borderBottomColor: theme.border }]}>
+            {publicPortrait ? <Image source={publicPortrait} contentFit="cover" style={styles.mobileAvatar} /> : <View style={[styles.mobileAvatar, { backgroundColor: theme.primaryContainer }]} />}
+            <View style={styles.mobileIdentityCopy}>
+              <Text style={[styles.mobileName, { color: theme.text }]}>{draft.name.trim() || '未命名角色'}</Text>
+              <Text style={[styles.mobileSubtitle, { color: theme.textMuted }]}>{pageMeta.title} · {pageMeta.access}</Text>
+            </View>
+            {page !== 'biography' ? <View style={styles.mobileImageActions}>
+              <Pressable accessibilityRole="button" onPress={() => pagePortrait ? setPreviewImage({ uri: pagePortrait, privatePage: page === 'private' }) : onImageRequest(page)} style={[styles.mobileImageAction, { borderColor: theme.border }]}><Text style={[styles.mobileImageActionText, { color: theme.primary }]}>{pagePortrait ? '查看' : '添加图'}</Text></Pressable>
+              {pagePortrait ? <Pressable accessibilityRole="button" onPress={() => onImageRequest(page)} style={[styles.mobileImageAction, { borderColor: theme.border }]}><Text style={[styles.mobileImageActionText, { color: theme.primary }]}>更换</Text></Pressable> : null}
+            </View> : null}
+          </View>
+          <View style={styles.mobilePageBody}>
+            {page === 'public' ? <>
+              <View style={styles.mobileFieldGrid}>
+                <MobileDossierField label="姓名" value={draft.name} placeholder="角色姓名" onChangeText={(value) => onDraftChange('name', value)} />
+                <MobileDossierField label="性别" value={draft.gender} placeholder="填写男或女" onChangeText={(value) => onDraftChange('gender', value)} />
+                <MobileDossierField label="身份 / 职业" value={draft.profession} placeholder="职业、专业、社会身份" onChangeText={(value) => onDraftChange('profession', value)} />
+                <MobileDossierField label="出生日期" value={dossier.public.birthDate} placeholder="如 2004年3月17日" onChangeText={(value) => updatePublic('birthDate', value)} />
+                <MobileDossierField label="年龄" value={draft.age} placeholder="如 22岁" onChangeText={(value) => onDraftChange('age', value)} />
+                <MobileDossierField label="籍贯 / 出生地" value={draft.birthplace ?? ''} placeholder="出生地、籍贯" onChangeText={(value) => onDraftChange('birthplace', value)} />
+                <MobileDossierField label="当前居住地" value={dossier.public.residence} placeholder="现居城市、住所" onChangeText={(value) => updatePublic('residence', value)} />
+                <MobileDossierField label="所属" value={draft.affiliation ?? ''} placeholder="学校、组织、阵营或团队" onChangeText={(value) => onDraftChange('affiliation', value)} />
+                <MobileDossierField label="其他称呼 / 触发词" value={aliasesInput ?? canonicalAliases} placeholder="昵称、头衔；用逗号分隔" onFocus={() => setAliasesInput(canonicalAliases)} onBlur={() => setAliasesInput(null)} onChangeText={(value) => { setAliasesInput(value); onDraftChange('aliases', normalizeAliases(value).filter((alias) => alias.toLowerCase() !== draft.name.trim().toLowerCase())); }} />
+                <MobileDossierField label="身高" value={draft.height} placeholder="如 186cm" onChangeText={(value) => onDraftChange('height', value)} />
+                <MobileDossierField label="体重" value={draft.weight} placeholder="如 80kg" onChangeText={(value) => onDraftChange('weight', value)} />
+                <MobileDossierField label="体脂率" value={dossier.public.bodyFat} placeholder="如 12%" onChangeText={(value) => updatePublic('bodyFat', value)} />
+                <MobileDossierField label="三围" value={dossier.public.measurements} placeholder="胸围 / 腰围 / 臀围" onChangeText={(value) => updatePublic('measurements', value)} />
+                <MobileDossierField label="鞋码" value={dossier.public.shoeSize} placeholder="如 EU 43" onChangeText={(value) => updatePublic('shoeSize', value)} />
+              </View>
+              <MobileDossierField label="其他身体记录" value={dossier.public.bodyStats} placeholder="肩宽、体型、身体比例、惯用手、旧伤与健康状况" multiline onChangeText={(value) => updatePublic('bodyStats', value)} />
+              <MobileDossierField label="长相与五官" value={draft.appearance} placeholder="脸型、眉眼、发型、肤色和稳定辨识特征" multiline onChangeText={(value) => onDraftChange('appearance', value)} />
+              <MobileDossierField label="穿衣风格" value={dossier.public.clothingStyle} placeholder="日常、工作、正式、居家与更换习惯" multiline onChangeText={(value) => updatePublic('clothingStyle', value)} />
+              <MobileDossierField label="公开侧写" value={dossier.public.personalityAndLife} placeholder="性格、情绪表达、习惯、作息、爱好与口头禅" multiline onChangeText={(value) => updatePublic('personalityAndLife', value)} />
+            </> : page === 'private' ? <>
+              <View style={[styles.mobileNotice, { backgroundColor: theme.primaryContainer, borderColor: theme.primary }]}><Text style={[styles.mobileNoticeTitle, { color: theme.primary }]}>{dossier.private.variant === 'male' ? '男性私密档案' : '女性私密档案'}</Text><Text style={[styles.mobileNoticeText, { color: theme.textMuted }]}>与公开立绘分开保存，只记录对人物和叙事有意义的内容。</Text></View>
+              {dossier.private.variant === 'male' ? <>
+                <MobileDossierField label="阴茎" value={dossier.private.penis} placeholder="身体事实与辨识特征" multiline onChangeText={(value) => updatePrivate('penis', value)} />
+                <MobileDossierField label="睾丸、阴囊与阴毛" value={dossier.private.testiclesAndPubicHair} placeholder="外观、体毛、修整与清洁习惯" multiline onChangeText={(value) => updatePrivate('testiclesAndPubicHair', value)} />
+                <MobileDossierField label="肛门与会阴" value={dossier.private.anus} placeholder="外观、健康、敏感度与清洁习惯" multiline onChangeText={(value) => updatePrivate('anus', value)} />
+                <MobileDossierField label="其他私密身体" value={dossier.private.intimateBody} placeholder="胸部、乳头、体毛、臀腿、气味等" multiline onChangeText={(value) => updatePrivate('intimateBody', value)} />
+              </> : <>
+                <MobileDossierField label="胸部与身体" value={dossier.private.breastsAndBody} placeholder="胸部、乳头、体毛、臀腿、气味等" multiline onChangeText={(value) => updatePrivate('breastsAndBody', value)} />
+                <MobileDossierField label="外阴与阴蒂" value={dossier.private.vulva} placeholder="外观、色泽、体毛、修整与清洁习惯" multiline onChangeText={(value) => updatePrivate('vulva', value)} />
+                <MobileDossierField label="阴道" value={dossier.private.vagina} placeholder="生理特征、敏感度与健康信息" multiline onChangeText={(value) => updatePrivate('vagina', value)} />
+                <MobileDossierField label="肛门与会阴" value={dossier.private.anus} placeholder="外观、健康、敏感度与清洁习惯" multiline onChangeText={(value) => updatePrivate('anus', value)} />
+              </>}
+              <MobileDossierField label="性生理反应" value={dossier.private.sexualResponse} placeholder="唤起、呼吸、肌肉反应、敏感区域与恢复" multiline onChangeText={(value) => updatePrivate('sexualResponse', value)} />
+              <MobileDossierField label="经验、偏好与习惯" value={dossier.private.intimacyProfile} placeholder="取向、经验、角色倾向与边界" multiline onChangeText={(value) => updatePrivate('intimacyProfile', value)} />
+            </> : <CharacterBiographyPage entries={draft.biographies ?? []} palette={visual} generatingId={biographyGeneratingId} onGenerate={onBiographyGenerate} onUpdate={onBiographyUpdate} onDelete={onBiographyDelete} />}
+          </View>
+        </View>
+        {previewImage ? <ImmersivePortraitViewer image={previewImage} onClose={() => setPreviewImage(null)} onEdit={(privatePage) => { setPreviewImage(null); onImageRequest(privatePage ? 'private' : 'public'); }} /> : null}
+      </DossierVisualContext.Provider>
+    );
   }
 
   return (
@@ -1252,6 +1352,24 @@ export function CharacterDossierBook({
 }
 
 const styles = StyleSheet.create({
+  mobileRoot: { width: '100%', gap: Spacing.three },
+  mobileIdentity: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: Spacing.two },
+  mobileAvatar: { width: 56, height: 56, borderRadius: 28 },
+  mobileIdentityCopy: { flex: 1, gap: 3 },
+  mobileName: { fontSize: 22, lineHeight: 28, fontWeight: '700' },
+  mobileSubtitle: { fontSize: 13, lineHeight: 18 },
+  mobileImageAction: { minHeight: 48, minWidth: 58, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.two },
+  mobileImageActionText: { fontSize: 14, fontWeight: '700' },
+  mobileImageActions: { flexDirection: 'row', gap: Spacing.one },
+  mobilePageBody: { gap: Spacing.three, paddingTop: Spacing.two },
+  mobileFieldGrid: { gap: Spacing.three },
+  mobileField: { gap: Spacing.one },
+  mobileFieldLabel: { fontSize: 14, lineHeight: 20, fontWeight: '700' },
+  mobileInput: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: Spacing.three, fontSize: 16 },
+  mobileInputMultiline: { minHeight: 112, paddingVertical: Spacing.two, lineHeight: 24 },
+  mobileNotice: { borderWidth: 1, borderRadius: 12, padding: Spacing.three, gap: Spacing.one },
+  mobileNoticeTitle: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
+  mobileNoticeText: { fontSize: 14, lineHeight: 20 },
   bookStage: {
     width: '100%',
     paddingHorizontal: 4,

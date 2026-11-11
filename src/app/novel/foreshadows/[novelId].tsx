@@ -7,11 +7,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { readNovelBlueprint } from '@/features/novel-creation/legacy-novel-adapter';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useDesktopLayout } from '@/hooks/use-desktop-layout';
 import { useTavernStore } from '@/store/tavern-store';
 import type { NovelForeshadowing, NovelForeshadowingStatus } from '@/types/tavern';
 import { importLegacyForeshadowings } from '@/utils/novel-foreshadowing-workspace';
 import { confirmAppAction } from '@/utils/app-alert';
 import { ThemedText } from '@/components/themed-text';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
+import { MobileAction, MobilePageIntro, MobileSegmentedTabs } from '@/components/mobile/MobileUI';
 
 const newId = () => `foreshadow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const chapterNumber = (value: string) => /^\d+$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
@@ -28,6 +31,8 @@ export default function NovelForeshadowsScreen() {
   const params = useLocalSearchParams<{ novelId?: string }>();
   const novelId = Array.isArray(params.novelId) ? params.novelId[0] : params.novelId;
   const theme = useTheme();
+  const desktop = useDesktopLayout();
+  const mobile = !desktop;
   const navigation = useNavigation<NavigationProp<{ chapters: { chapterId?: string; inspirationId?: string } }>>();
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   const replace = useTavernStore((state) => state.replaceNovelForeshadowings);
@@ -35,8 +40,10 @@ export default function NovelForeshadowsScreen() {
   const [draft, setDraft] = useState<NovelForeshadowing | null>(null);
   const [message, setMessage] = useState('');
   const [dirty, setDirty] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | NovelForeshadowingStatus>('all');
 
   const items = novel?.foreshadowings ?? [];
+  const visibleItems = statusFilter === 'all' ? items : items.filter((item) => item.status === statusFilter);
   const legacyThreads = useMemo(() => (novel ? readNovelBlueprint(novel).longForm.openThreads.filter((item) => item.trim()) : []), [novel]);
 
   usePreventRemove(dirty, ({ data }) => {
@@ -123,10 +130,18 @@ export default function NovelForeshadowsScreen() {
   const updateStatus = (status: NovelForeshadowingStatus) => { setDirty(true); setDraft((current) => current ? { ...current, status, fulfilledChapterIndex: status === 'fulfilled' ? (current.fulfilledChapterIndex ?? (current.plantedChapterIndex || 0)) : current.fulfilledChapterIndex } : current); };
   const changeDraft = (updates: Partial<NovelForeshadowing>) => { setDirty(true); setDraft((current) => current ? { ...current, ...updates } : current); };
 
-  return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+  return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>{mobile ? <NovelMobileNavigation novelId={novelId} title="伏笔管理" /> : null}
+    <ScrollView contentContainerStyle={[styles.content, mobile && styles.mobileContent]} keyboardShouldPersistTaps="handled">
       <View style={styles.topbar}><Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={() => router.back()} hitSlop={10}><ThemedText type="code" themeColor="accent">← 返回</ThemedText></Pressable><ThemedText type="code" themeColor="textMuted">FORESHADOWS / {novel.name}</ThemedText></View>
-      <View style={styles.heading}><ThemedText type="title">伏笔账本</ThemedText><ThemedText type="small" themeColor="textSecondary">把要埋下、推进和回收的线索单独记下来，写作时会作为上下文提供给故事引擎。</ThemedText></View>
+      {mobile ? (
+        <MobilePageIntro
+          title="伏笔管理"
+          subtitle={`《${novel.name}》· ${items.length} 条线索`}
+          action={<MobileAction label="新建伏笔" icon="plus" onPress={() => void openEditor()} />}
+        />
+      ) : (
+        <View style={styles.heading}><ThemedText type="title">伏笔账本</ThemedText><ThemedText type="small" themeColor="textSecondary">把要埋下、推进和回收的线索单独记下来，写作时会作为上下文提供给故事引擎。</ThemedText></View>
+      )}
 
       {!!message && !draft && <ThemedText type="small" themeColor="success">{message}</ThemedText>}
       {legacyThreads.length > 0 && <View style={[styles.legacyCard, { backgroundColor: theme.surface, borderColor: theme.outlineVariant }]}>
@@ -135,9 +150,10 @@ export default function NovelForeshadowsScreen() {
         <Pressable accessibilityRole="button" onPress={importLegacy} style={[styles.primaryButton, { backgroundColor: theme.buttonPrimary }]}><ThemedText style={{ color: theme.buttonText }}>导入到伏笔账本</ThemedText></Pressable>
       </View>}
 
-      <View style={styles.toolbar}><ThemedText type="subtitle">手动伏笔</ThemedText><Pressable accessibilityRole="button" onPress={() => openEditor()} style={[styles.secondaryButton, { borderColor: theme.outline }]}><ThemedText themeColor="accent">＋ 新建伏笔</ThemedText></Pressable></View>
-      {items.length === 0 && <View style={[styles.empty, { borderColor: theme.outlineVariant }]}><ThemedText themeColor="textSecondary">还没有伏笔。先记录一个你不想忘记的线索。</ThemedText></View>}
-      {items.map((item) => <Pressable accessibilityRole="button" key={item.id} onPress={() => openEditor(item)} style={[styles.item, { backgroundColor: theme.surface, borderColor: item.id === selectedId ? theme.primary : theme.outlineVariant }]}>
+      {!mobile && <View style={styles.toolbar}><ThemedText type="subtitle">手动伏笔</ThemedText><Pressable accessibilityRole="button" onPress={() => openEditor()} style={[styles.secondaryButton, { borderColor: theme.outline }]}><ThemedText themeColor="accent">＋ 新建伏笔</ThemedText></Pressable></View>}
+      {mobile && <MobileSegmentedTabs items={[{ value: 'all', label: `全部 ${items.length}` }, { value: 'open', label: `未回收 ${items.filter((item) => item.status === 'open').length}` }, { value: 'fulfilled', label: `已回收 ${items.filter((item) => item.status === 'fulfilled').length}` }, { value: 'dropped', label: `已放弃 ${items.filter((item) => item.status === 'dropped').length}` }]} value={statusFilter} onChange={setStatusFilter} />}
+      {visibleItems.length === 0 && <View style={[styles.empty, mobile && styles.mobileEmpty, { borderColor: theme.outlineVariant }]}><ThemedText themeColor="textSecondary">还没有符合条件的伏笔。先记录一个你不想忘记的线索。</ThemedText></View>}
+      {visibleItems.map((item) => <Pressable accessibilityRole="button" key={item.id} onPress={() => openEditor(item)} style={[styles.item, mobile && styles.mobileItem, { backgroundColor: theme.surface, borderColor: item.id === selectedId ? theme.primary : theme.outlineVariant }]}>
         <View style={styles.itemHeader}><ThemedText type="smallBold">{item.keyword || '未命名伏笔'}</ThemedText><ThemedText type="code" themeColor={item.status === 'open' ? 'warning' : item.status === 'fulfilled' ? 'success' : 'textMuted'}>{item.status === 'open' ? '未回收' : item.status === 'fulfilled' ? '已回收' : '已放弃'}</ThemedText></View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>{item.description}</ThemedText><ThemedText type="code" themeColor="textMuted">{item.plantedChapterIndex > 0 ? `第${item.plantedChapterIndex}章埋设` : '待埋设'}{item.dueAfterChapterIndex ? ` · 第${item.dueAfterChapterIndex}章后回收` : ''}</ThemedText>
       </Pressable>)}
@@ -160,5 +176,5 @@ export default function NovelForeshadowsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 }, content: { width: '100%', maxWidth: 1080, alignSelf: 'center', padding: Spacing.four, paddingBottom: Spacing.six, gap: Spacing.three }, topbar: { minHeight: 52, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, heading: { gap: Spacing.one, paddingVertical: Spacing.three }, legacyCard: { borderWidth: 1, borderRadius: Radius.large, padding: Spacing.four, gap: Spacing.two }, thread: { lineHeight: 24 }, toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, item: { borderWidth: 1, borderRadius: Radius.medium, padding: Spacing.three, gap: Spacing.one, minWidth: 0 }, itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, empty: { borderWidth: 1, borderStyle: 'dashed', padding: Spacing.four, borderRadius: Radius.medium }, editor: { borderWidth: 1, borderRadius: Radius.large, padding: Spacing.four, gap: Spacing.three, minWidth: 0 }, field: { gap: Spacing.one, flex: 1, minWidth: 0 }, input: { minHeight: 44, width: '100%', borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, fontSize: 15 }, multiline: { minHeight: 92, textAlignVertical: 'top' }, row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three }, half: { flex: 1, minWidth: 220 }, statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two }, statusButton: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three }, actions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two }, primaryButton: { minHeight: 44, borderRadius: Radius.small, paddingHorizontal: Spacing.three, justifyContent: 'center', alignItems: 'center', alignSelf: 'flex-start' }, secondaryButton: { minHeight: 44, borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three, justifyContent: 'center', alignItems: 'center' }, contextCard: { borderWidth: 1, borderRadius: Radius.medium, padding: Spacing.three, gap: Spacing.one }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  safeArea: { flex: 1 }, content: { width: '100%', maxWidth: 1080, alignSelf: 'center', padding: Spacing.four, paddingBottom: Spacing.six, gap: Spacing.three }, mobileContent: { paddingHorizontal: 20, paddingTop: 20, gap: 16 }, topbar: { minHeight: 52, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, heading: { gap: Spacing.one, paddingVertical: Spacing.three }, legacyCard: { borderWidth: 1, borderRadius: Radius.large, padding: Spacing.four, gap: Spacing.two }, thread: { lineHeight: 24 }, toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, item: { borderWidth: 1, borderRadius: Radius.medium, padding: Spacing.three, gap: Spacing.one, minWidth: 0 }, mobileItem: { borderRadius: 12, padding: 16, gap: 8, minHeight: 96 }, itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two }, empty: { borderWidth: 1, borderStyle: 'dashed', padding: Spacing.four, borderRadius: Radius.medium }, mobileEmpty: { minHeight: 120, justifyContent: 'center' }, editor: { borderWidth: 1, borderRadius: Radius.large, padding: Spacing.four, gap: Spacing.three, minWidth: 0 }, field: { gap: Spacing.one, flex: 1, minWidth: 0 }, input: { minHeight: 44, width: '100%', borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, fontSize: 15 }, multiline: { minHeight: 92, textAlignVertical: 'top' }, row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three }, half: { flex: 1, minWidth: 220 }, statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two }, statusButton: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three }, actions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two }, primaryButton: { minHeight: 44, borderRadius: Radius.small, paddingHorizontal: Spacing.three, justifyContent: 'center', alignItems: 'center', alignSelf: 'flex-start' }, secondaryButton: { minHeight: 44, borderWidth: 1, borderRadius: Radius.small, paddingHorizontal: Spacing.three, justifyContent: 'center', alignItems: 'center' }, contextCard: { borderWidth: 1, borderRadius: Radius.medium, padding: Spacing.three, gap: Spacing.one }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

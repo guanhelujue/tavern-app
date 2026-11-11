@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
@@ -24,10 +24,11 @@ export function WorkbenchPanel({ title, subtitle, children, action }: WorkbenchP
           backgroundColor: theme.surface,
           borderColor: theme.border,
         },
+        Platform.OS !== 'web' && { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0, padding: 0, gap: 20 },
       ]}>
       <View style={styles.header}>
         <View style={styles.headerText}>
-          <ThemedText type="smallBold" style={styles.title}>
+          <ThemedText type="smallBold" style={[styles.title, Platform.OS !== 'web' && { fontSize: 20, lineHeight: 28 }]}>
             {title}
           </ThemedText>
           {subtitle ? (

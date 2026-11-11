@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { OutlineWorkspace } from '@/features/outline-workspace/OutlineWorkspace';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
 import { NovelStoryPlanningPanel } from '@/components/novel-create/NovelStoryPlanningPanel';
 import { NOVEL_TARGET_WORDS_RANGE } from '@/constants/novel-continuation';
 import { Spacing } from '@/constants/theme';
@@ -480,6 +481,13 @@ export default function WorldOutlineScreen() {
 
   if (desktop) {
     return <><Stack.Screen options={{ headerShown: false }} /><OutlineWorkspace key={`${currentNovel.id}-${scopeId}`} novelId={currentNovel.id} worldId={isWorldScope ? currentWorld?.id : undefined} /></>;
+  }
+  if (!desktop) {
+    return <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <NovelMobileNavigation novelId={currentNovel.id} title={isWorldScope ? `${currentWorld?.name ?? '小世界'}大纲` : '世界与大纲'} />
+      <View style={styles.nativeWorkspace}><OutlineWorkspace key={`${currentNovel.id}-${scopeId}`} novelId={currentNovel.id} worldId={isWorldScope ? currentWorld?.id : undefined} /></View>
+    </SafeAreaView>;
   }
   function selectOutlineOperation(nextOperation: OutlineOperation) {
     setOutlineOperation(nextOperation);
@@ -1356,6 +1364,7 @@ export default function WorldOutlineScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  nativeWorkspace: { flex: 1, minHeight: 0 },
   content: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
   contentCompact: { padding: Spacing.three, gap: Spacing.two, paddingBottom: Spacing.five },
   pageStage: { width: '100%', maxWidth: 1240, alignSelf: 'center', gap: Spacing.three },

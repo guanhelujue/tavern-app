@@ -1,4 +1,6 @@
 import { TaskModelSelector } from '@/components/TaskModelSelector';
+import { MobileAction, MobileEmptyState, MobileSectionTitle, mobileStyles } from '@/components/mobile/MobileUI';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
 import { router, useNavigation } from 'expo-router';
 import type { NavigationProp } from 'expo-router/react-navigation';
 import { useMemo, useState } from 'react';
@@ -37,7 +39,7 @@ import { getNovelAuditSourceFingerprint, isNovelRewriteAuditCurrent } from '@/se
 import { useTavernStore } from '@/store/tavern-store';
 import type { Message, Novel, NovelChapter, NovelContinuationSettings } from '@/types/tavern';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
-import { exportAssistantTranscript } from '@/utils/chat-session-io';
+import { exportAssistantTranscript, exportChatSessionBundle } from '@/utils/chat-session-io';
 import {
   calculateNovelOutlineTotalWords,
   clampNovelOutlineChapterCount,
@@ -72,7 +74,7 @@ export function NovelWorkbench({
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
   // The route is shared by the mobile tabs and the desktop project navigation.
   const tab = initialTab;
-  const tabTitle = tab === 'tools' ? '任务与导出' : tab === 'context' ? '上下文管理' : tab === 'analysis' ? '正文分析' : tab === 'chapters' ? '章节创作' : TABS.find((item) => item.key === tab)?.label;
+  const tabTitle = tab === 'tools' ? '任务与导出' : tab === 'context' ? '上下文管理' : tab === 'analysis' ? '正文分析' : tab === 'chapters' ? '章节创作' : tab === 'forecast' ? '路线推演' : tab === 'consistency' ? '一致性检查' : tab === 'settings' ? '写作参数' : TABS.find((item) => item.key === tab)?.label;
   function setTab(next: WorkbenchTab) {
     navigation.setParams({ focus: next });
   }
@@ -82,6 +84,7 @@ export function NovelWorkbench({
   const [showInstructionInput, setShowInstructionInput] = useState(false);
   const [showSceneInspiration, setShowSceneInspiration] = useState(false);
   const [instruction, setInstruction] = useState('');
+  const [fileAction, setFileAction] = useState<'export' | 'backup' | null>(null);
 
   // 长任务运行状态以 store 中的任务记录为准：切页 / 切出本小说后组件重挂载也能恢复真实状态。
   const jobs = novel?.novelGenerationJobs ?? [];
@@ -245,21 +248,28 @@ export function NovelWorkbench({
     }
   }
 
+  async function handleFileAction(action: 'export' | 'backup') {
+    if (fileAction) return;
+    setFileAction(action);
+    try {
+      if (action === 'export') {
+        await handleExportBook();
+      } else {
+        const state = useTavernStore.getState();
+        const bundle = await state.buildNovelBackup(novelId);
+        const result = await exportChatSessionBundle(bundle, state.exportSettings.directoryUri);
+        showAppAlert('备份已导出', `已保存为 ${result.fileName}，可从作品库恢复。`);
+      }
+    } catch (error) {
+      showAppAlert('备份失败', error instanceof Error ? error.message : '请稍后重试。');
+    } finally {
+      setFileAction(null);
+    }
+  }
+
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={[styles.header, desktop && styles.desktopHeader, { borderBottomColor: theme.border }]}>
-        {!desktop && <Pressable
-          onPress={() => {
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace('/(tabs)/novels');
-            }
-          }}
-          hitSlop={10}
-          style={styles.headerButton}>
-          <ThemedText themeColor="textMuted">←</ThemedText>
-        </Pressable>}
+      {desktop ? <View style={[styles.header, desktop && styles.desktopHeader, { borderBottomColor: theme.border }]}>
         <View style={styles.headerText}>
           <ThemedText type={desktop ? 'subtitle' : 'smallBold'} numberOfLines={1}>
             {desktop ? tabTitle : novel.name}
@@ -268,42 +278,45 @@ export function NovelWorkbench({
             定稿 {finalCount} / 共 {chapters.length} 章 · {totalChars} 字
           </ThemedText>
         </View>
-      </View>
-
-      {!desktop && <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabBarContent}>
-          {TABS.map((item) => {
-            const active = item.key === tab;
-            return (
-              <Pressable
-                key={item.key}
-                onPress={() => {
-                  if (item.key === 'outline') {
-                    router.push(`/novel/world-outline/${novelId}`);
-                    return;
-                  }
-                  setTab(item.key);
-                }}
-                style={[styles.tabItem, active && { borderBottomColor: theme.accent }]}>
-                <ThemedText
-                  type="smallBold"
-                  themeColor={active ? 'accent' : 'textMuted'}>
-                  {item.label}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>}
+      </View> : <NovelMobileNavigation novelId={novelId} title={tabTitle} />}
 
       <ScrollView
         style={styles.body}
-        contentContainerStyle={[styles.bodyContent, desktop && styles.desktopBodyContent]}
+        key={tab}
+        contentContainerStyle={[styles.bodyContent, desktop ? styles.desktopBodyContent : mobileStyles.content]}
         keyboardShouldPersistTaps="handled">
-        {tab === 'chapters' || tab === 'tools' ? (
+        {!desktop && tab === 'tools' ? <View style={{ gap: 28 }}>
+          <View style={{ gap: 16 }}>
+            <MobileSectionTitle title="创作任务" />
+            {jobs.length === 0 ? <MobileEmptyState title="暂时没有任务" description="开始写作或正文分析后，可以在这里查看进度。" /> : [...jobs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 20).map(job => <View key={job.jobId} style={{ paddingVertical: 16, gap: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.outlineVariant }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+                <ThemedText type="smallBold" style={{ flex: 1 }}>{({ write: '章节写作', analyze: '正文分析', forecast: '路线推演', outline: '大纲生成', extract: '知识提取', 'extract-style': '文风提取', enrich: '资料完善', batch: '历史批量任务' })[job.kind]}{job.chapterIndex ? ` · 第 ${job.chapterIndex} 章` : ''}</ThemedText>
+                <ThemedText type="small" themeColor={job.status === 'failed' ? 'error' : 'primary'}>{({ queued: '等待中', running: '进行中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消' })[job.status]}</ThemedText>
+              </View>
+              {job.currentStep ? <ThemedText type="small" themeColor="textSecondary">{job.currentStep}</ThemedText> : null}
+              {job.status === 'running' ? <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(job.progress * 100) }} style={{ height: 4, borderRadius: 2, backgroundColor: theme.surfaceVariant }}><View style={{ height: 4, borderRadius: 2, width: `${Math.max(0, Math.min(1, job.progress)) * 100}%`, backgroundColor: theme.primary }} /></View> : null}
+              {job.lastError ? <ThemedText type="small" themeColor="error">{job.lastError}</ThemedText> : null}
+              <ThemedText type="small" themeColor="textMuted">{new Date(job.updatedAt).toLocaleString('zh-CN')}</ThemedText>
+              {job.kind === 'write' && (job.status === 'paused' || job.status === 'failed') ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                <MobileAction label={job.status === 'paused' ? '继续任务' : '重试任务'} disabled={isGenerating} onPress={() => void recoverWritingJob(job.jobId, job.status === 'failed')} />
+                <MobileAction label="放弃任务" variant="text" onPress={() => abandonNovelGenerationJob(novelId, job.jobId)} />
+              </View> : null}
+            </View>)}
+          </View>
+          <View style={{ gap: 12 }}>
+            <MobileSectionTitle title="导出与备份" />
+            <ThemedText type="small" themeColor="textSecondary">正文导出包含 {finalCount} 章定稿；作品档案同时保留设定、草稿与知识资料。</ThemedText>
+            <MobileAction label="导出全书正文" busy={fileAction === 'export'} disabled={!!fileAction || !finalCount} onPress={() => void handleFileAction('export')} />
+            <MobileAction label="备份作品档案" variant="secondary" busy={fileAction === 'backup'} disabled={!!fileAction} onPress={() => void handleFileAction('backup')} />
+          </View>
+          <View style={{ gap: 8 }}>
+            <MobileSectionTitle title="写作工具" />
+            <MobileAction label="路线推演 →" variant="secondary" onPress={() => setTab('forecast')} />
+            <MobileAction label="全书一致性检查 →" variant="secondary" onPress={() => setTab('consistency')} />
+            <MobileAction label="写作参数 →" variant="secondary" onPress={() => setTab('settings')} />
+          </View>
+        </View> : null}
+        {tab === 'chapters' || (desktop && tab === 'tools') ? (
           <View style={[styles.stack, splitPanels && styles.desktopPanels]}>
             <View style={[styles.stack, splitPanels && styles.desktopSupport]}>
             {recoverableWriteJob ? (

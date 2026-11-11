@@ -14,6 +14,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { MobileAction, MobilePageIntro } from '@/components/mobile/MobileUI';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -70,6 +72,7 @@ export default function WorldAtlasScreen() {
   const theme = useTheme();
   const { width } = useWindowDimensions();
   const desktop = useDesktopLayout();
+  const mobile = !desktop;
   const wide = desktop || width >= 760;
   const params = useLocalSearchParams();
   const novelId = Array.isArray(params.novelId) ? params.novelId[0] : params.novelId;
@@ -337,19 +340,25 @@ export default function WorldAtlasScreen() {
   }
 
   return (
-    <ThemedView decorated style={styles.container}>
-      <Stack.Screen options={{ title: '世界设定', headerShown: true, headerBackTitle: '知识库', headerStyle: { backgroundColor: theme.background }, headerTintColor: theme.accent, headerTitleStyle: { color: theme.text, fontWeight: '700' } }} />
-      <SafeAreaView style={[styles.safeArea, desktop && styles.safeAreaDesktop]} edges={['left', 'right', 'bottom']}>
-        <ScrollView contentContainerStyle={[styles.content, desktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
+    <ThemedView decorated={!mobile} style={styles.container}>
+      <Stack.Screen options={{ title: '世界设定', headerShown: !mobile, headerBackTitle: '知识库', headerStyle: { backgroundColor: theme.background }, headerTintColor: theme.accent, headerTitleStyle: { color: theme.text, fontWeight: '700' } }} />
+      <SafeAreaView style={[styles.safeArea, desktop && styles.safeAreaDesktop]} edges={mobile ? ['top', 'left', 'right', 'bottom'] : ['left', 'right', 'bottom']}>
+        {mobile ? <NovelMobileNavigation novelId={novel.id} title="知识库" /> : null}
+        <ScrollView contentContainerStyle={[styles.content, desktop && styles.contentDesktop, mobile && styles.mobileContent]} showsVerticalScrollIndicator={false}>
+          {mobile ? <View style={{ gap: 16 }}>
+            <MobilePageIntro title="知识库" subtitle={`${entries.length} 条资料 · 世界设定与故事规则`} />
+            <Pressable accessibilityRole="button" onPress={openOverview} style={({ pressed }) => [{ padding: 16, borderRadius: 12, gap: 8, backgroundColor: theme.primaryContainer }, pressed && styles.pressed]}><ThemedText type="smallBold" themeColor="primary">世界总览 · 编辑 →</ThemedText><ThemedText style={{ fontSize: 18, lineHeight: 28 }}>{novel.worldName.trim() || '尚未命名的世界'}</ThemedText></Pressable>
+            <MobileAction label="和 AI 一起构思世界" variant="text" onPress={() => router.push({ pathname: '/novel/planning', params: { kind: 'world', novelId } } as Href)} />
+          </View> : <>
           <Animated.View style={{ opacity: introReveal, transform: [{ translateX: introReveal.interpolate({ inputRange: [0, 1], outputRange: [36, 0] }) }, { scaleX: introReveal.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }}>
-            <View style={styles.heroTopline}><View style={[styles.heroRule, { backgroundColor: theme.accent }]} /><Text style={[styles.eyebrow, { color: theme.accent }]}>WORLD ATLAS / LIVE INDEX</Text></View>
+            <View style={[styles.heroTopline, mobile && styles.mobileHeroTopline]}><View style={[styles.heroRule, { backgroundColor: theme.accent }]} /><Text style={[styles.eyebrow, { color: theme.accent }]}>WORLD ATLAS / LIVE INDEX</Text></View>
             <View style={[styles.heroRow, wide && styles.heroRowWide]}>
-              <View style={styles.heroCopy}><Text style={[styles.heroTitle, desktop && styles.heroTitleDesktop, { color: theme.text }]}>世界档案馆</Text><Text style={[styles.heroDescription, desktop && styles.bodyTextDesktop, { color: theme.textMuted }]}>先按分卷浏览，再打开具体条目。只有正文命中名称或别名时，详细设定才进入上下文。</Text></View>
+              <View style={styles.heroCopy}><Text style={[styles.heroTitle, desktop && styles.heroTitleDesktop, mobile && styles.mobileHeroTitle, { color: theme.text }]}>知识库</Text><Text style={[styles.heroDescription, desktop && styles.bodyTextDesktop, { color: theme.textMuted }]}>世界总览、资料分组与条目都在这里管理。</Text></View>
               <View style={[styles.heroMetric, { borderColor: theme.border }]}><Text style={[styles.heroMetricValue, { color: theme.text }]}>{entries.length}</Text><Text style={[styles.heroMetricLabel, { color: theme.textMuted }]}>条已归档</Text></View>
             </View>
           </Animated.View>
 
-          <Pressable onPress={openOverview} style={({ pressed }) => [styles.overview, { backgroundColor: theme.accent }, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="编辑世界总览">
+          <Pressable onPress={openOverview} style={({ pressed }) => [styles.overview, mobile && { minHeight: 188, borderRadius: 12, padding: 20 }, { backgroundColor: theme.accent }, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="编辑世界总览">
             <View pointerEvents="none" style={[styles.overviewOrbit, { borderColor: theme.onPrimary }]} /><Text pointerEvents="none" style={[styles.overviewMonogram, { color: theme.onPrimary }]}>界</Text>
             <View style={styles.overviewHeader}><Text style={[styles.overviewEyebrow, { color: `${theme.onPrimary}B8` }]}>MASTER DOSSIER</Text><Text style={[styles.overviewEdit, { color: theme.onPrimary }]}>编辑总览 ↗</Text></View>
             <Text style={[styles.overviewTitle, { color: theme.onPrimary }]}>{novel.worldName.trim() || '尚未命名的世界'}</Text>
@@ -365,19 +374,20 @@ export default function WorldAtlasScreen() {
             <Text style={[styles.planningEntryArrow, { color: theme.accent }]}>进入 ↗</Text>
           </Pressable>
 
+          </>}
           <View style={styles.collectionSection}>
             <View style={styles.sectionHeadingRow}>
               <View style={styles.sectionHeadingCopy}><Text style={[styles.sectionIndex, { color: theme.accent }]}>卷宗索引</Text><Text style={[styles.sectionTitle, { color: theme.text }]}>选择一卷，只看相关资料</Text></View>
-              <Pressable onPress={() => setIsCollectionModalOpen(true)} style={({ pressed }) => [styles.textAction, pressed && styles.pressed]}><Text style={[styles.textActionLabel, { color: theme.accent }]}>新分卷 / 模板 ＋</Text></Pressable>
+              <Pressable onPress={() => setIsCollectionModalOpen(true)} style={({ pressed }) => [styles.textAction, mobile && { minHeight: 48, justifyContent: 'center' }, pressed && styles.pressed]}><Text style={[styles.textActionLabel, { color: theme.accent }]}>新分卷 / 模板 ＋</Text></Pressable>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.collectionRail}>
               {collections.map((collection, index) => {
                 const active = collection.id === activeCollection?.id;
                 const count = collectionCounts.get(collection.id) ?? 0;
                 return (
-                  <Pressable key={collection.id} onPress={() => setActiveCollectionId(collection.id)} style={({ pressed }) => [styles.collectionTab, { borderColor: active ? theme.accent : theme.border, backgroundColor: active ? theme.accentMuted : theme.backgroundElement }, pressed && styles.pressed]}>
-                    <View style={styles.collectionTabTop}><Text style={[styles.collectionSerial, { color: active ? theme.accent : theme.textMuted }]}>{String(index + 1).padStart(2, '0')}</Text><Text style={[styles.collectionCount, { color: active ? theme.accent : theme.textMuted }]}>{count} 条</Text></View>
-                    <Text numberOfLines={1} style={[styles.collectionName, { color: theme.text }]}>{collection.name}</Text><Text numberOfLines={2} style={[styles.collectionDescription, { color: theme.textMuted }]}>{collection.description}</Text>
+                  <Pressable key={collection.id} onPress={() => setActiveCollectionId(collection.id)} style={({ pressed }) => [styles.collectionTab, mobile && { minHeight: 64, width: 140, borderRadius: 12, padding: 12 }, { borderColor: active ? theme.accent : theme.border, backgroundColor: active ? theme.accentMuted : theme.backgroundElement }, pressed && styles.pressed]}>
+                    {!mobile ? <View style={styles.collectionTabTop}><Text style={[styles.collectionSerial, { color: active ? theme.accent : theme.textMuted }]}>{String(index + 1).padStart(2, '0')}</Text><Text style={[styles.collectionCount, { color: active ? theme.accent : theme.textMuted }]}>{count} 条</Text></View> : null}
+                    <Text numberOfLines={1} style={[styles.collectionName, { color: theme.text }]}>{collection.name}</Text>{!mobile ? <Text numberOfLines={2} style={[styles.collectionDescription, { color: theme.textMuted }]}>{collection.description}</Text> : <ThemedText type="small" themeColor="textMuted">{count} 条</ThemedText>}
                   </Pressable>
                 );
               })}
@@ -385,14 +395,14 @@ export default function WorldAtlasScreen() {
           </View>
 
           {activeCollection ? (
-            <View style={[styles.ledger, desktop && styles.ledgerDesktop, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+            <View style={[styles.ledger, desktop && styles.ledgerDesktop, mobile && { padding: 0, borderWidth: 0, borderRadius: 0 }, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
               <View style={styles.ledgerHeader}>
                 <View style={styles.ledgerTitleBlock}><Text style={[styles.ledgerEyebrow, { color: theme.accent }]}>OPEN VOLUME · {NOVEL_LORE_TYPE_LABELS[activeCollection.defaultType]}</Text><Text style={[styles.ledgerTitle, { color: theme.text }]}>{activeCollection.name}</Text><Text style={[styles.ledgerDescription, { color: theme.textMuted }]}>{activeCollection.description}</Text></View>
-                <View style={styles.ledgerActions}>
-                  <Pressable onPress={() => { void openLorePlanning(); }} style={[styles.minorAction, { borderColor: theme.accent }]}><Text style={[styles.minorActionText, { color: theme.accent }]}>对话构思新条目</Text></Pressable>
-                  {activeIsCustom ? <Pressable onPress={() => void deleteActiveCollection()} style={({ pressed }) => [styles.minorAction, { borderColor: theme.border }, pressed && styles.pressed]}><Text style={[styles.minorActionText, { color: theme.textMuted }]}>删卷</Text></Pressable> : null}
-                  <Pressable onPress={openBatchCreate} style={({ pressed }) => [styles.minorAction, { borderColor: theme.accent }, pressed && styles.pressed]}><Text style={[styles.minorActionText, { color: theme.accent }]}>AI 起草</Text></Pressable>
-                  <Pressable onPress={openCreate} style={({ pressed }) => [styles.addAction, { backgroundColor: theme.accent }, pressed && styles.pressed]}><Text style={[styles.addActionText, { color: theme.onPrimary }]}>新增条目 ＋</Text></Pressable>
+                <View style={[styles.ledgerActions, mobile && { width: '100%' }]}>
+                  <Pressable onPress={() => { void openLorePlanning(); }} style={[styles.minorAction, mobile && { minHeight: 44, borderRadius: 12 }, { borderColor: theme.accent }]}><Text style={[styles.minorActionText, { color: theme.accent }]}>对话构思新条目</Text></Pressable>
+                  {activeIsCustom ? <Pressable onPress={() => void deleteActiveCollection()} style={({ pressed }) => [styles.minorAction, mobile && { minHeight: 44, borderRadius: 12 }, { borderColor: theme.border }, pressed && styles.pressed]}><Text style={[styles.minorActionText, { color: theme.textMuted }]}>删卷</Text></Pressable> : null}
+                  <Pressable onPress={openBatchCreate} style={({ pressed }) => [styles.minorAction, mobile && { minHeight: 44, borderRadius: 12 }, { borderColor: theme.accent }, pressed && styles.pressed]}><Text style={[styles.minorActionText, { color: theme.accent }]}>AI 起草</Text></Pressable>
+                  <Pressable onPress={openCreate} style={({ pressed }) => [styles.addAction, mobile && { minHeight: 44, borderRadius: 12 }, { backgroundColor: theme.accent }, pressed && styles.pressed]}><Text style={[styles.addActionText, { color: theme.onPrimary }]}>新增条目 ＋</Text></Pressable>
                 </View>
               </View>
               {visibleEntries.length === 0 ? (
@@ -406,7 +416,7 @@ export default function WorldAtlasScreen() {
                         <Text style={[styles.entryIndex, { color: theme.textMuted }]}>{String(index + 1).padStart(2, '0')}</Text>
                         <View style={styles.entryCopy}><View style={styles.entryTitleRow}><Text numberOfLines={1} style={[styles.entryTitle, desktop && styles.entryTitleDesktop, { color: theme.text }]}>{entry.name || '未命名'}</Text><Text style={[styles.entryType, { color: theme.accent }]}>{NOVEL_LORE_TYPE_LABELS[entry.type]}</Text></View><Text numberOfLines={2} style={[styles.entryContent, desktop && styles.bodyTextDesktop, { color: theme.textSecondary }]}>{entry.content.trim() || '暂无正文'}</Text>{entry.aliases.length > 0 ? <Text numberOfLines={1} style={[styles.entryAliases, { color: theme.textMuted }]}>触发词 · {aliasesToText(entry.aliases)}</Text> : null}</View>
                       </Pressable>
-                      <View style={styles.entryActions}><Pressable onPress={() => router.push({ pathname: '/novel/planning', params: { kind: 'lore', novelId, entryId: entry.id } } as Href)} hitSlop={8}><Text style={[styles.deleteText, { color: theme.accent }]}>规划</Text></Pressable><Pressable onPress={() => void handleDelete(entry)} hitSlop={8}><Text style={styles.deleteText}>删除</Text></Pressable><Switch value={enabled} onValueChange={(next) => handleToggle(entry, next)} trackColor={{ false: theme.backgroundSelected, true: theme.accentMuted }} thumbColor={enabled ? theme.accent : theme.textMuted} /></View>
+                      <View style={[styles.entryActions, mobile && { flexWrap: 'wrap', gap: 4, justifyContent: 'flex-start' }]}><Pressable style={mobile && { minHeight: 44, minWidth: 64, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8 }} onPress={() => router.push({ pathname: '/novel/planning', params: { kind: 'lore', novelId, entryId: entry.id } } as Href)} hitSlop={8}><Text style={[styles.deleteText, { color: theme.accent }]}>规划</Text></Pressable><Pressable style={mobile && { minHeight: 44, minWidth: 64, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8 }} onPress={() => void handleDelete(entry)} hitSlop={8}><Text style={styles.deleteText}>删除</Text></Pressable><View style={mobile && { minHeight: 44, justifyContent: 'center' }}><Switch value={enabled} onValueChange={(next) => handleToggle(entry, next)} trackColor={{ false: theme.backgroundSelected, true: theme.accentMuted }} thumbColor={enabled ? theme.accent : theme.textMuted} /></View></View>
                     </View>
                   );
                 })}</View>
@@ -452,8 +462,8 @@ function LabeledInput({ label, value, onChangeText, placeholder, multiline = fal
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 }, safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' }, safeAreaDesktop: { maxWidth: 1600 }, content: { padding: Spacing.four, gap: Spacing.five, paddingBottom: Spacing.six }, contentDesktop: { paddingHorizontal: Spacing.five, paddingTop: Spacing.five, gap: Spacing.six }, centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.three, padding: Spacing.four },
-  heroTopline: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.three }, heroRule: { width: 32, height: 3 }, eyebrow: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.55 }, heroRow: { gap: Spacing.three }, heroRowWide: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, heroCopy: { flex: 1, maxWidth: 580, gap: 7 }, heroTitle: { fontFamily: 'serif', fontSize: 42, lineHeight: 49, fontWeight: '600', letterSpacing: -0.4 }, heroTitleDesktop: { fontSize: 52, lineHeight: 60 }, heroDescription: { maxWidth: 560, fontSize: 12, lineHeight: 20 }, bodyTextDesktop: { fontSize: 15, lineHeight: 24 }, heroMetric: { minWidth: 130, borderLeftWidth: 1, paddingLeft: Spacing.three, paddingBottom: 3 }, heroMetricValue: { fontFamily: 'serif', fontSize: 30, lineHeight: 34, fontWeight: '500' }, heroMetricLabel: { fontSize: 8, lineHeight: 12, letterSpacing: 0.8, fontWeight: '800' },
+  container: { flex: 1 }, safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' }, safeAreaDesktop: { maxWidth: 1600 }, content: { padding: Spacing.four, gap: Spacing.five, paddingBottom: Spacing.six }, contentDesktop: { paddingHorizontal: Spacing.five, paddingTop: Spacing.five, gap: Spacing.six }, mobileContent: { paddingHorizontal: 20, paddingTop: 20, gap: 16 }, centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.three, padding: Spacing.four },
+  heroTopline: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.three }, mobileHeroTopline: { marginBottom: 8 }, heroRule: { width: 32, height: 3 }, eyebrow: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.55 }, heroRow: { gap: Spacing.three }, heroRowWide: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, heroCopy: { flex: 1, maxWidth: 580, gap: 7 }, heroTitle: { fontFamily: 'serif', fontSize: 42, lineHeight: 49, fontWeight: '600', letterSpacing: -0.4 }, mobileHeroTitle: { fontSize: 28, lineHeight: 38 }, heroTitleDesktop: { fontSize: 52, lineHeight: 60 }, heroDescription: { maxWidth: 560, fontSize: 12, lineHeight: 20 }, bodyTextDesktop: { fontSize: 15, lineHeight: 24 }, heroMetric: { minWidth: 130, borderLeftWidth: 1, paddingLeft: Spacing.three, paddingBottom: 3 }, heroMetricValue: { fontFamily: 'serif', fontSize: 30, lineHeight: 34, fontWeight: '500' }, heroMetricLabel: { fontSize: 8, lineHeight: 12, letterSpacing: 0.8, fontWeight: '800' },
   overview: { minHeight: 252, overflow: 'hidden', padding: Spacing.four, justifyContent: 'flex-end' }, overviewOrbit: { position: 'absolute', width: 230, height: 230, borderRadius: 115, borderWidth: StyleSheet.hairlineWidth, top: -92, right: -62, opacity: 0.35 }, overviewMonogram: { position: 'absolute', top: -30, right: 22, fontFamily: 'serif', fontSize: 142, lineHeight: 172, opacity: 0.1 }, overviewHeader: { position: 'absolute', top: Spacing.three, left: Spacing.four, right: Spacing.four, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, overviewEyebrow: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.5 }, overviewEdit: { fontSize: 10, lineHeight: 15, fontWeight: '800' }, overviewTitle: { maxWidth: '78%', fontFamily: 'serif', fontSize: 32, lineHeight: 39, fontWeight: '600' }, overviewEra: { maxWidth: 600, marginTop: 7, fontSize: 12, lineHeight: 19 }, overviewRule: { height: StyleSheet.hairlineWidth, marginVertical: Spacing.three }, overviewRules: { maxWidth: 650, fontSize: 10, lineHeight: 17 }, planningEntry: { minHeight: 84, borderWidth: 1, padding: Spacing.three, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.three }, planningEntryCopy: { flex: 1, gap: 3 }, planningEntryEyebrow: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.3 }, planningEntryTitle: { fontFamily: 'serif', fontSize: 20, lineHeight: 25, fontWeight: '600' }, planningEntryDescription: { fontSize: 10, lineHeight: 15 }, planningEntryArrow: { fontSize: 10, fontWeight: '900' },
   collectionSection: { gap: Spacing.three }, sectionHeadingRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: Spacing.three }, sectionHeadingCopy: { flex: 1, gap: 3 }, sectionIndex: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.35 }, sectionTitle: { fontFamily: 'serif', fontSize: 20, lineHeight: 26, fontWeight: '600' }, textAction: { paddingVertical: 5 }, textActionLabel: { fontSize: 10, lineHeight: 15, fontWeight: '800' }, collectionRail: { gap: Spacing.two, paddingRight: Spacing.four }, collectionTab: { width: 178, minHeight: 126, borderWidth: 1, padding: Spacing.three, gap: 7 }, collectionTabTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, collectionSerial: { fontFamily: 'monospace', fontSize: 9, lineHeight: 13, fontWeight: '800', letterSpacing: 0.8 }, collectionCount: { fontSize: 8, lineHeight: 12, fontWeight: '800' }, collectionName: { fontFamily: 'serif', fontSize: 18, lineHeight: 23, fontWeight: '600' }, collectionDescription: { fontSize: 9, lineHeight: 15 },
   ledger: { borderWidth: 1, padding: Spacing.four, gap: Spacing.four }, ledgerDesktop: { padding: Spacing.five, gap: Spacing.five }, ledgerHeader: { gap: Spacing.three }, ledgerTitleBlock: { maxWidth: 580, gap: 4 }, ledgerEyebrow: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.4 }, ledgerTitle: { fontFamily: 'serif', fontSize: 30, lineHeight: 37, fontWeight: '600' }, ledgerDescription: { fontSize: 11, lineHeight: 17 }, ledgerActions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two }, minorAction: { minHeight: 38, borderWidth: 1, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' }, minorActionText: { fontSize: 10, lineHeight: 14, fontWeight: '800' }, addAction: { minHeight: 38, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' }, addActionText: { fontSize: 10, lineHeight: 14, fontWeight: '900' },

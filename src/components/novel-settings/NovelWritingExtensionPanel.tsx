@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
@@ -11,6 +11,7 @@ import { resolveApiSettings, useTavernStore } from '@/store/tavern-store';
 import { showAppAlert } from '@/utils/app-alert';
 import { DEFAULT_JAILBREAK_PROMPT, normalizeWritingPromptExtensions } from '@/utils/writing-prompt-extensions';
 import { NovelModPanel } from './NovelModPanel';
+import { MobileAction, MobileSectionTitle } from '@/components/mobile/MobileUI';
 
 export function NovelWritingExtensionPanel({ kind }: { kind: 'jailbreak' | 'mod' }) {
   return kind === 'mod' ? <NovelModPanel /> : <WritingExtensionTextPanel />;
@@ -63,6 +64,19 @@ function WritingExtensionTextPanel() {
     } finally {
       setIsPolishing(false);
     }
+  }
+
+  if (Platform.OS !== 'web') {
+    return <View style={styles.mobilePanel}>
+      <MobileSectionTitle title="写作扩展" />
+      <View style={styles.mobileSwitchRow}>
+        <View style={styles.switchCopy}><ThemedText type="smallBold">启用破限词</ThemedText><ThemedText type="small" themeColor="textMuted">开启时注入下方提示词；关闭时保留文本，不注入。</ThemedText></View>
+        <Switch accessibilityLabel="启用破限词" value={enabled} onValueChange={(value) => updateContentStyleSettings({ jailbreakEnabled: value })} trackColor={{ false: theme.backgroundSelected, true: theme.accentMuted }} thumbColor={enabled ? theme.accent : theme.textMuted} />
+      </View>
+      <View style={styles.mobileField}><ThemedText type="smallBold">破限词提示词</ThemedText><ThemedText type="small" themeColor="textMuted">用于小说正文、小传与灵感对话。角色档案补全使用独立提示词。</ThemedText><TextInput accessibilityLabel="破限词提示词" value={prompt} onChangeText={updatePrompt} editable={!isPolishing} placeholder="填写破限词提示词…" placeholderTextColor={theme.textMuted} multiline textAlignVertical="top" style={[styles.input, styles.mobileTextArea, { backgroundColor: theme.backgroundElement, borderColor: theme.border, color: theme.text }]} /></View>
+      <TaskModelSelector task="prompt" disabled={isPolishing} />
+      <View style={styles.mobileActions}><MobileAction label="恢复默认" variant="secondary" disabled={isPolishing} onPress={() => updatePrompt(DEFAULT_JAILBREAK_PROMPT)} /><MobileAction label={isPolishing ? '润色中…' : 'AI 润色'} disabled={isPolishing || !prompt.trim()} busy={isPolishing} onPress={() => { void handlePolishPrompt(); }} /></View>
+    </View>;
   }
 
   return (
@@ -182,6 +196,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: Spacing.one,
   },
+  mobilePanel: { gap: Spacing.three },
+  mobileSwitchRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingVertical: Spacing.two },
+  mobileField: { gap: Spacing.two },
+  mobileTextArea: { minHeight: 220, borderRadius: 12, padding: Spacing.three, fontSize: 16, lineHeight: 24 },
+  mobileActions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
   ghostButton: {
     borderWidth: 1,
     borderRadius: 16,

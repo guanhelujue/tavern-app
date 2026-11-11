@@ -50,6 +50,8 @@ import { castFromDossier, ensureNovelDossiers } from '@/utils/novel-dossiers';
 import { normalizePlayerProfileFields } from '@/utils/novel-player';
 import { readNovelBlueprint } from '@/features/novel-creation/legacy-novel-adapter';
 import { resolvePortraitDisplayUri } from '@/utils/character-card-portraits';
+import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
+import { MobileAction, MobilePageIntro } from '@/components/mobile/MobileUI';
 import {
   detectPortraitFocus,
   getPortraitContentPosition,
@@ -80,6 +82,11 @@ function formatCharacterMeta(parts: (string | undefined)[]) {
   return cleaned.length > 0 ? cleaned.join(' · ') : '暂无摘要';
 }
 
+function excerptCharacter(dossier: NovelCharacterDossier, cast: NovelCastCharacter) {
+  const text = [dossier.experience, cast.motive, cast.personality, cast.background].find((item) => item?.trim())?.trim() ?? '尚未填写人物简介';
+  return text.length > 96 ? `${text.slice(0, 96)}…` : text;
+}
+
 function resolveCastHeight(
   dossier: NovelCharacterDossier,
   castList: NovelCastCharacter[],
@@ -96,6 +103,7 @@ function resolveCastHeight(
 export default function NovelCharacterKnowledgeScreen() {
   const theme = useTheme();
   const desktop = useDesktopLayout();
+  const mobile = !desktop;
   const params = useLocalSearchParams();
   const novelId = Array.isArray(params.novelId) ? params.novelId[0] : params.novelId;
   const novels = useTavernStore((state) => state.novels);
@@ -155,8 +163,8 @@ export default function NovelCharacterKnowledgeScreen() {
     [appearanceId],
   );
   const chrome = useMemo(
-    () => resolveCharacterCardUiTheme(appearanceId),
-    [appearanceId],
+    () => { const palette = resolveCharacterCardUiTheme(appearanceId); return !mobile ? palette : { ...palette, background: theme.background, inputBackground: theme.surface, text: theme.text, textMuted: theme.textSecondary, accent: theme.primary, accentContrast: theme.onPrimary, border: theme.outlineVariant, headerBorder: theme.outlineVariant }; },
+    [appearanceId, mobile, theme],
   );
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -509,11 +517,11 @@ export default function NovelCharacterKnowledgeScreen() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <ThemedView decorated style={styles.container}>
+      <ThemedView decorated={!mobile} style={styles.container}>
         <Stack.Screen
           options={{
             title: '角色知识库',
-            headerShown: true,
+            headerShown: !mobile,
             headerBackTitle: '知识库',
             headerStyle: { backgroundColor: theme.background },
             headerTintColor: theme.accent,
@@ -521,10 +529,20 @@ export default function NovelCharacterKnowledgeScreen() {
           }}
         />
 
-        <SafeAreaView style={[styles.safeArea, desktop && styles.safeAreaDesktop]} edges={['left', 'right', 'bottom']}>
-          <ScrollView contentContainerStyle={[styles.content, desktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
+        <SafeAreaView style={[styles.safeArea, desktop && styles.safeAreaDesktop]} edges={mobile ? ['top', 'left', 'right', 'bottom'] : ['left', 'right', 'bottom']}>
+          {mobile ? <NovelMobileNavigation novelId={novel.id} title="人物" /> : null}
+          <ScrollView contentContainerStyle={[styles.content, desktop && styles.contentDesktop, mobile && styles.mobileContent]} showsVerticalScrollIndicator={false}>
+            {mobile ? (
+              <MobilePageIntro
+                title="人物档案"
+                subtitle={`《${novel.name}》· ${dossiers.length} 位角色`}
+                action={<MobileAction label="新建人物" icon={{ ios: 'plus', android: 'add', web: 'add' }} onPress={openCreate} />}
+              />
+            ) : null}
+            {mobile ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}><MobileAction label="人物关系与运营" variant="secondary" onPress={() => setIsOperationsOpen(true)} /><MobileAction label="卡面设置" variant="text" onPress={() => setIsAppearancePickerOpen(true)} /></View> : null}
             <Animated.View
               style={[
+                mobile && styles.mobileHeroHidden,
                 styles.archiveHeroShell,
                 { backgroundColor: chrome.inputBackground, borderColor: chrome.border },
                 {
@@ -696,7 +714,7 @@ export default function NovelCharacterKnowledgeScreen() {
                 还没有角色。点上方「新建」；可勾选「是否主角」，支持男女双主角。
               </ThemedText>
             ) : (
-              <View style={desktop ? styles.cardGrid : undefined}>
+              <View style={desktop ? styles.cardGrid : styles.mobileList}>
               {dossiers.slice(0, visibleCharacterCount).map((dossier, dossierIndex) => {
                 const linkedCast =
                   (dossier.castId
@@ -772,6 +790,7 @@ export default function NovelCharacterKnowledgeScreen() {
                     <View
                       style={[
                         styles.card,
+                        mobile && styles.mobileCard,
                         {
                           backgroundColor: chrome.background,
                           borderColor: chrome.border,
@@ -784,10 +803,10 @@ export default function NovelCharacterKnowledgeScreen() {
                       />
                       <Text
                         pointerEvents="none"
-                        style={[styles.cardSerial, { color: chrome.accent }]}>
+                        style={[styles.cardSerial, mobile && styles.mobileHidden, { color: chrome.accent }]}>
                         {String(dossierIndex + 1).padStart(2, '0')}
                       </Text>
-                      <View pointerEvents="none" style={styles.cardTelemetry}>
+                      <View pointerEvents="none" style={[styles.cardTelemetry, mobile && styles.mobileHidden]}>
                         <View style={[styles.cardTelemetryDot, { backgroundColor: chrome.accent }]} />
                         <Text style={[styles.cardTelemetryText, { color: chrome.textMuted }]}> 
                           PERSONA / {enabled ? 'ACTIVE' : 'DORMANT'}
@@ -796,7 +815,7 @@ export default function NovelCharacterKnowledgeScreen() {
                       {portraitUri ? (
                         <View
                           pointerEvents="none"
-                          style={styles.cardPortraitGhost}
+                          style={[styles.cardPortraitGhost, mobile && styles.mobileCardPortrait]}
                           onLayout={({ nativeEvent: { layout } }) => {
                             if (layout.width <= 0 || layout.height <= 0) return;
                             setPortraitRenderMetrics((current) => {
@@ -822,6 +841,7 @@ export default function NovelCharacterKnowledgeScreen() {
                             source={portraitUri}
                             style={[
                               styles.cardPortraitGhostImage,
+                              mobile && styles.mobileCardPortraitImage,
                               Platform.OS === 'android' && styles.cardPortraitGhostImageAndroid,
                             ]}
                             contentFit="cover"
@@ -857,7 +877,7 @@ export default function NovelCharacterKnowledgeScreen() {
                         pointerEvents="none"
                       />
 
-                      <View style={styles.cardRow}>
+                      <View style={[styles.cardRow, mobile && styles.mobileCardRow]}>
                         <Pressable
                           onPress={() => openEdit(dossier)}
                           onLongPress={() => {
@@ -870,7 +890,7 @@ export default function NovelCharacterKnowledgeScreen() {
                           ]}
                           accessibilityRole="button"
                           accessibilityLabel={`编辑角色 ${displayName}`}>
-                          <View style={styles.cardCopy}>
+                          <View style={[styles.cardCopy, mobile && styles.mobileCardCopy]}>
                             <View style={styles.cardNameRow}>
                               <Text
                                 style={[styles.cardName, { color: chrome.text }]}
@@ -913,6 +933,11 @@ export default function NovelCharacterKnowledgeScreen() {
                               numberOfLines={1}>
                               {metaLine}
                             </Text>
+                            {mobile ? (
+                              <Text style={[styles.mobileSummary, { color: chrome.textMuted }]} numberOfLines={2}>
+                                {excerptCharacter(dossier, summaryCast)}
+                              </Text>
+                            ) : null}
                           </View>
                         </Pressable>
 
@@ -1108,6 +1133,16 @@ export default function NovelCharacterKnowledgeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  mobileContent: { paddingHorizontal: 20, paddingTop: 20, gap: 16 },
+  mobileHeroHidden: { display: 'none' },
+  mobileList: { gap: 10 },
+  mobileCard: { minHeight: 112, borderWidth: 1, padding: 12, overflow: 'hidden' },
+  mobileCardPortrait: { position: 'absolute', width: 72, height: 72, borderRadius: 36, left: 12, top: 20, right: undefined, bottom: undefined, opacity: 1, zIndex: 2 },
+  mobileCardPortraitImage: { borderRadius: 36 },
+  mobileHidden: { display: 'none' },
+  mobileSummary: { fontSize: 14, lineHeight: 21, marginTop: 4 },
+  mobileCardRow: { alignItems: 'center', gap: 0, paddingLeft: Spacing.three },
+  mobileCardCopy: { paddingLeft: 82, minHeight: 78, justifyContent: 'center' },
   safeArea: { flex: 1, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
   safeAreaDesktop: { maxWidth: 1600 },
   content: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },

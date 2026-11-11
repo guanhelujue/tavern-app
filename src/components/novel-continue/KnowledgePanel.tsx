@@ -1,6 +1,6 @@
 import { router, type Href } from "expo-router";
 import { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 
 import { WorkbenchPanel } from "@/components/novel-continue/WorkbenchPanel";
 import { ThemedText } from "@/components/themed-text";
@@ -37,6 +37,8 @@ const TIMELINE_TYPE_LABEL: Record<NovelTimelineEvent["type"], string> = {
 /** 只读展示状态分析生成的剧情线与事件资料；正式设定统一进入各自知识页。 */
 export function KnowledgePanel({ novelId }: { novelId: string }) {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const mobile = width < 600;
   const novel = useTavernStore((state) =>
     state.novels.find((item) => item.id === novelId),
   );
@@ -58,11 +60,11 @@ export function KnowledgePanel({ novelId }: { novelId: string }) {
   return (
     <WorkbenchPanel
       title="剧情资料"
-      subtitle="续写分析生成的只读资料；正式设定请在统一知识页维护。"
+      subtitle="正文分析生成的只读资料；正式设定请在统一知识页维护。"
     >
       <View
         style={[
-          styles.entryCard,
+          [styles.entryCard, mobile && styles.mobileCard],
           {
             backgroundColor: theme.backgroundSelected,
             borderColor: theme.border,
@@ -112,7 +114,7 @@ export function KnowledgePanel({ novelId }: { novelId: string }) {
 
       <View
         style={[
-          styles.segmentRow,
+          [styles.segmentRow, mobile && styles.mobileSegmentRow],
           { backgroundColor: theme.backgroundElement },
         ]}
       >
@@ -390,6 +392,7 @@ const styles = StyleSheet.create({
     padding: Spacing.two,
     gap: 8,
   },
+  mobileCard: { borderRadius: 12, padding: 16 },
   entryActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   entryButton: {
     minHeight: 44,
@@ -399,6 +402,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   segmentRow: { flexDirection: "row", borderRadius: 12, padding: 3, gap: 4 },
+  mobileSegmentRow: { minHeight: 48, padding: 4 },
   segmentItem: {
     flex: 1,
     alignItems: "center",

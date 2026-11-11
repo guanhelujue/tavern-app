@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NovelFormField } from '@/components/novel-create/NovelFormField';
+import { MobilePageHeader, mobileStyles } from '@/components/mobile/MobileUI';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -39,7 +40,7 @@ function BlueprintField({
   };
 
   return (
-    <ThemedView type="surface" style={styles.sectionCard}>
+    <ThemedView type="surface" style={[styles.sectionCard, Platform.OS !== 'web' && { backgroundColor: 'transparent', padding: 0, gap: 24 }]}>
       <NovelFormField label="世界名称" required editable={editable} value={blueprint.title} placeholder="给这个世界起个名字，也可以先用暂定名" onChangeText={(title) => edit({ title })} />
       <NovelFormField label="世界内容" required editable={editable} multiline minHeight={200} value={blueprint.setting} placeholder="写下这个世界的背景、规则，或你想写的一段故事。暂时想到多少，就写多少。" onChangeText={(setting) => edit({ setting })} />
     </ThemedView>
@@ -172,11 +173,12 @@ export default function NewNovelCreationScreen() {
   const activeBlueprint = session.step === 'blueprint' ? session.blueprint : undefined;
 
   return (
-    <ThemedView decorated style={styles.container}>
+    <ThemedView decorated={Platform.OS === 'web'} style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-            <View style={styles.topBar}>
+          {Platform.OS !== 'web' ? <MobilePageHeader title={activeBlueprint ? '创建作品' : '故事构思'} onBack={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)/novels'); }} action={<ThemedText type="small" themeColor="textMuted">自动保存</ThemedText>} /> : null}
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, Platform.OS !== 'web' && mobileStyles.content]}>
+            {Platform.OS === 'web' ? <View style={styles.topBar}>
               <Pressable accessibilityRole="button" onPress={() => {
                 if (router.canGoBack()) router.back();
                 else router.replace('/(tabs)/novels' as Href);
@@ -184,17 +186,17 @@ export default function NewNovelCreationScreen() {
                 <ThemedText type="smallBold" themeColor="accent">返回</ThemedText>
               </Pressable>
               <ThemedText type="code" themeColor="textMuted">自动保存</ThemedText>
-            </View>
+            </View> : null}
 
             <View style={styles.hero}>
-              <ThemedText type="code" themeColor="accent">NEW STORY</ThemedText>
+              {Platform.OS === 'web' ? <ThemedText type="code" themeColor="accent">NEW STORY</ThemedText> : null}
               <ThemedText style={styles.title}>
-                {activeBlueprint ? '从一个世界，开始写。' : '找一点灵感。'}
+                {activeBlueprint ? '故事，从这里开始' : '找一点灵感'}
               </ThemedText>
               <ThemedText themeColor="textSecondary" style={styles.subtitle}>
                 {activeBlueprint
-                  ? '起个名字，写下世界内容，就可以开始。人物、冲突和剧情安排，之后在世界与大纲里慢慢完善。'
-                  : '不需要先选模式。写下一句话、几个意象，或者完全留空，让 AI 给出三个能够持续展开的长篇方向。'}
+                  ? '先定下世界，随时可以继续完善。'
+                  : '写下一句话或几个意象，让 AI 帮你寻找故事方向。'}
               </ThemedText>
             </View>
 
@@ -272,8 +274,9 @@ export default function NewNovelCreationScreen() {
 
             {activeBlueprint ? (
               <>
+                {Platform.OS !== 'web' ? <TaskModelSelector task="creation" disabled={busyAction !== null} /> : null}
                 <BlueprintField blueprint={activeBlueprint} editable={busyAction === null} onEdit={(event) => { void send(event); }} />
-                <View style={styles.finalActions}>
+                <View style={[styles.finalActions, Platform.OS !== 'web' && { flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch', width: '100%' }]}>
                   <Pressable accessibilityRole="button" disabled={busyAction !== null} onPress={() => { void send({ type: 'back-to-seed' }); }} style={styles.textButton}>
                     <ThemedText type="smallBold" themeColor="textMuted">让 AI 帮我构思</ThemedText>
                   </Pressable>
@@ -281,7 +284,7 @@ export default function NewNovelCreationScreen() {
                     accessibilityRole="button"
                     disabled={busyAction !== null}
                     onPress={() => { void commit(); }}
-                    style={({ pressed }) => [styles.primaryButton, { flex: 1, backgroundColor: theme.accent }, (pressed || busyAction) && styles.dimmed]}>
+                    style={({ pressed }) => [styles.primaryButton, { flex: Platform.OS === 'web' ? 1 : undefined, backgroundColor: theme.accent }, (pressed || busyAction) && styles.dimmed]}>
                     <ThemedText type="smallBold" style={{ color: theme.onPrimary }}>
                       {busyAction === 'commit' ? '正在创建…' : '创建并开始写作'}
                     </ThemedText>
@@ -304,24 +307,24 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, width: '100%', maxWidth: Math.min(MaxContentWidth, 880) },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   flex: { flex: 1 },
-  content: { paddingHorizontal: Spacing.four, paddingTop: Spacing.three, paddingBottom: 72, gap: Spacing.four },
+  content: { paddingHorizontal: Spacing.four, paddingTop: Spacing.three, paddingBottom: 72, gap: Spacing.three },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   hero: { gap: Spacing.two },
-  title: { fontSize: 32, lineHeight: 42, fontWeight: '700', letterSpacing: -1 },
+  title: { fontSize: 28, lineHeight: 36, fontWeight: '700', letterSpacing: -0.5 },
   subtitle: { lineHeight: 24, maxWidth: 540 },
   errorCard: { borderWidth: 1, borderRadius: 14, padding: Spacing.three },
-  seedCard: { borderWidth: 1, borderRadius: 24, padding: Spacing.four, gap: Spacing.three },
-  primaryButton: { minHeight: 54, borderRadius: 18, paddingHorizontal: Spacing.four, alignItems: 'center', justifyContent: 'center' },
-  textButton: { minHeight: 42, paddingHorizontal: Spacing.two, alignItems: 'center', justifyContent: 'center' },
+  seedCard: { borderWidth: 1, borderRadius: 12, padding: Spacing.three, gap: Spacing.three },
+  primaryButton: { minHeight: 48, borderRadius: 12, paddingHorizontal: Spacing.four, alignItems: 'center', justifyContent: 'center' },
+  textButton: { minHeight: 48, paddingHorizontal: Spacing.two, alignItems: 'center', justifyContent: 'center' },
   dimmed: { opacity: 0.58 },
   ideaList: { gap: Spacing.three },
-  ideaCard: { borderWidth: 1, borderRadius: 22, padding: Spacing.four, gap: Spacing.three },
+  ideaCard: { borderWidth: 1, borderRadius: 12, padding: Spacing.three, gap: Spacing.three },
   ideaHeading: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.two },
-  ideaTitle: { flex: 1, fontSize: 24, lineHeight: 30, fontWeight: '700' },
+  ideaTitle: { flex: 1, fontSize: 20, lineHeight: 28, fontWeight: '700' },
   ideaFact: { gap: 4 },
-  chooseButton: { minHeight: 48, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  chooseButton: { minHeight: 48, borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   rowActions: { flexDirection: 'row', justifyContent: 'space-between' },
   planningLink: { alignItems: 'center', padding: Spacing.two },
-  sectionCard: { borderRadius: 22, padding: Spacing.four, gap: Spacing.three },
+  sectionCard: { borderRadius: 12, padding: Spacing.three, gap: Spacing.three },
   finalActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Spacing.two },
 });

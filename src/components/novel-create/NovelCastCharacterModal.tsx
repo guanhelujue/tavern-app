@@ -54,6 +54,9 @@ import type { PortraitFocus } from '@/utils/portrait-focus';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
 import { normalizeCastPrivacyFields } from '@/utils/novel-dossiers';
 import { resolveCharacterCardUiTheme } from '@/utils/character-card-ui-theme';
+import { useTheme } from '@/hooks/use-theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { StatusBar } from 'expo-status-bar';
 
 const SWIPE_DISTANCE = 56;
 const SWIPE_VELOCITY = 420;
@@ -96,6 +99,8 @@ export function NovelCastCharacterModal({
   worldContext,
 }: NovelCastCharacterModalProps) {
   const insets = useSafeAreaInsets();
+  const theme = useTheme();
+  const colorScheme = useColorScheme();
   const { width: windowWidth } = useWindowDimensions();
   const compactWorkspace = windowWidth < 760;
   const providers = useTavernStore((state) => state.providers);
@@ -157,10 +162,29 @@ export function NovelCastCharacterModal({
     [appearanceId],
   );
 
-  const chrome = useMemo(
-    () => resolveCharacterCardUiTheme(resolvedAppearance.id),
-    [resolvedAppearance.id],
-  );
+  const chrome = useMemo(() => {
+    const appearanceChrome = resolveCharacterCardUiTheme(resolvedAppearance.id);
+    if (Platform.OS === 'web') return appearanceChrome;
+    return {
+      ...appearanceChrome,
+      background: theme.background,
+      border: theme.border,
+      accent: theme.primary,
+      accentContrast: theme.onPrimary,
+      text: theme.text,
+      textMuted: theme.textMuted,
+      label: theme.textMuted,
+      inputBackground: theme.backgroundElement,
+      inputBorder: theme.border,
+      stamp: theme.primary,
+      stampBackground: theme.primaryContainer,
+      headerTitle: theme.text,
+      headerSubtitle: theme.textMuted,
+      headerBorder: theme.border,
+      panelRadius: 12,
+      inputRadius: 12,
+    };
+  }, [resolvedAppearance.id, theme]);
 
   const activeDossierV2 = useMemo(
     () => normalizeCharacterDossierV2(draft.dossierV2, draft),
@@ -757,8 +781,9 @@ export function NovelCastCharacterModal({
   const analysisImageUri = analysisTarget === 'private'
     ? activeDossierV2.private.portraitUri?.trim()
     : draft.portraitUri?.trim();
-  const showAiPanel =
-    (sheetPage === 0 && (!isExistingCharacter || aiPanelOpen)) || sheetPage === 1;
+  const showAiPanel = Platform.OS === 'web'
+    ? (sheetPage === 0 && (!isExistingCharacter || aiPanelOpen)) || sheetPage === 1
+    : sheetPage !== 2 && aiPanelOpen;
   const showPageNavigationButtons = Platform.OS === 'web';
   const aiBusy = isGenerating || isAnalyzingPortrait;
 
@@ -973,9 +998,36 @@ export function NovelCastCharacterModal({
     <>
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <GestureHandlerRootView style={styles.modalRoot}>
+      {Platform.OS !== 'web' ? (
+        <KeyboardAvoidingView
+          style={[styles.mobileBackdrop, { backgroundColor: chrome.background, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+          <View style={[styles.mobileHeader, { borderBottomColor: chrome.border }]}>
+            <View style={styles.mobileHeaderCopy}>
+              <Text style={[styles.mobileHeaderEyebrow, { color: chrome.accent }]}>人物详情</Text>
+              <Text style={[styles.mobileHeaderTitle, { color: chrome.text }]} numberOfLines={1}>{draft.name.trim() || '未命名角色'}</Text>
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="关闭角色编辑" onPress={onClose} style={[styles.mobileClose, { borderColor: chrome.border }]}><Text style={[styles.mobileCloseText, { color: chrome.accent }]}>×</Text></Pressable>
+          </View>
+          <View style={[styles.mobileTabs, { borderBottomColor: chrome.border }]}>
+            {['公开', '私密', '小传'].map((label, index) => { const active = sheetPage === index; return <Pressable key={label} accessibilityRole="tab" accessibilityState={{ selected: active }} onPress={() => flipTo(index as CharacterSheetPage)} style={[styles.mobileTab, active && { backgroundColor: chrome.accent }]}><Text style={[styles.mobileTabText, { color: active ? chrome.accentContrast : chrome.textMuted }]}>{label}</Text></Pressable>; })}
+          </View>
+          <View style={[styles.mobileModelRow, { borderBottomColor: chrome.border }]}>
+            <TaskModelSelector task="character" disabled={aiBusy || Boolean(biographyGeneratingId) || biographyStorageBusy} />
+            {sheetPage !== 2 ? <Pressable accessibilityRole="button" onPress={() => setAiPanelOpen((open) => !open)} style={[styles.mobileAiToggle, { borderColor: chrome.border }]}><Text style={[styles.mobileAiToggleText, { color: chrome.accent }]}>{aiPanelOpen ? '收起 AI' : 'AI 补全'}</Text></Pressable> : null}
+          </View>
+          <GHScrollView ref={bodyScrollRef} style={styles.mobileStage} contentContainerStyle={styles.mobileBody} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+            {editorBlock}
+          </GHScrollView>
+          <View style={[styles.mobileSaveBar, { borderTopColor: chrome.border, backgroundColor: chrome.background }]}>
+            <Pressable disabled={biographyStorageBusy} onPress={() => { void handleConfirm(); }} style={[styles.mobileSaveButton, { backgroundColor: chrome.accent }, biographyStorageBusy && { opacity: 0.5 }]}><Text style={[styles.mobileSaveText, { color: chrome.accentContrast }]}>{biographyStorageBusy ? '同步小传中…' : '保存角色'}</Text></Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      ) : (
         <KeyboardAvoidingView
           style={styles.backdrop}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          behavior="height">
           <Pressable style={styles.dismiss} onPress={onClose} />
           <View
             style={[
@@ -1188,6 +1240,7 @@ export function NovelCastCharacterModal({
           </View>
           </View>
         </KeyboardAvoidingView>
+      )}
       </GestureHandlerRootView>
     </Modal>
     <CharacterPortraitPickerModal
@@ -1294,6 +1347,24 @@ export function NovelCastCharacterModal({
 }
 
 const styles = StyleSheet.create({
+  mobileBackdrop: { flex: 1, paddingTop: Spacing.three },
+  mobileHeader: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two, paddingHorizontal: Spacing.four, paddingBottom: Spacing.two, borderBottomWidth: StyleSheet.hairlineWidth },
+  mobileHeaderCopy: { flex: 1, gap: 2 },
+  mobileHeaderEyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '700' },
+  mobileHeaderTitle: { fontSize: 24, lineHeight: 30, fontWeight: '700' },
+  mobileClose: { width: 48, height: 48, borderWidth: 1, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  mobileCloseText: { fontSize: 28, lineHeight: 30, fontWeight: '300' },
+  mobileTabs: { flexDirection: 'row', gap: Spacing.one, paddingHorizontal: Spacing.four, paddingVertical: Spacing.two, borderBottomWidth: StyleSheet.hairlineWidth },
+  mobileTab: { minHeight: 48, flex: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  mobileTabText: { fontSize: 15, lineHeight: 20, fontWeight: '700' },
+  mobileModelRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingHorizontal: Spacing.four, paddingVertical: Spacing.one, borderBottomWidth: StyleSheet.hairlineWidth },
+  mobileAiToggle: { minHeight: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: Spacing.two, alignItems: 'center', justifyContent: 'center' },
+  mobileAiToggleText: { fontSize: 13, fontWeight: '700' },
+  mobileStage: { flex: 1 },
+  mobileBody: { paddingHorizontal: Spacing.four, paddingTop: Spacing.three, paddingBottom: Spacing.four, gap: Spacing.three },
+  mobileSaveBar: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: Spacing.four, paddingTop: Spacing.two, paddingBottom: Spacing.three },
+  mobileSaveButton: { minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  mobileSaveText: { fontSize: 16, lineHeight: 22, fontWeight: '700' },
   modalRoot: {
     flex: 1,
   },

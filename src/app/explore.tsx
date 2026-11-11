@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
+  BackHandler,
   Platform,
   Pressable,
   ScrollView,
@@ -44,9 +46,16 @@ import { pickExportDirectory } from '@/utils/chat-session-io';
 import { discoverProviderModels } from '@/services/provider-model-discovery';
 import { confirmAppAction, showAppAlert } from '@/utils/app-alert';
 import { AppAboutPanel } from '@/components/settings/AppAboutPanel';
+import { MobileIcon, MobilePageHeader, MobilePageIntro, MobileSectionTitle, mobileStyles } from '@/components/mobile/MobileUI';
 
 export default function SettingsScreen() {
   const theme = useTheme();
+  const [mobileSection, setMobileSection] = useState<'overview' | 'appearance' | 'models' | 'images' | 'export' | 'advanced' | 'about'>('overview');
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS === 'web' || mobileSection === 'overview') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => { setMobileSection('overview'); return true; });
+    return () => subscription.remove();
+  }, [mobileSection]));
   const {
     addProvider,
     addImageProvider,
@@ -304,18 +313,26 @@ export default function SettingsScreen() {
   }
 
   return (
-    <ThemedView decorated style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-          <AppPageHeader
+    <ThemedView decorated={Platform.OS === 'web'} style={styles.container}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <ScrollView key={mobileSection} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={[styles.content, Platform.OS !== 'web' && mobileStyles.content]}>
+          {Platform.OS === 'web' ? <AppPageHeader
             title="系统设置"
             eyebrow="SYSTEM / PREFERENCES"
             index="04"
             description="外观、模型连接、图像引擎与导出。各功能的模型在对应页面选择。"
             compact
-          />
+          /> : mobileSection !== 'overview' ? <MobilePageHeader title={({ appearance: '外观', models: '模型连接', images: '图像引擎', export: '导出设置', advanced: '高级参数', about: '关于' } as const)[mobileSection]} onBack={() => setMobileSection('overview')} /> : null}
+          {Platform.OS !== 'web' && mobileSection === 'overview' ? <View style={styles.mobileOverview}>
+            <MobilePageIntro title="系统设置" subtitle="让工具更适合你的写作习惯" />
+            {([
+              ['体验', [['appearance', '外观', '主题、颜色模式与动画', 'paintpalette'], ['models', '模型连接', '厂商、API 与写作模型', 'link'], ['images', '图像引擎', '封面与插图模型', 'photo']]],
+              ['数据与参数', [['export', '导出设置', '格式、文件名与保存位置', 'arrow.down.to.line'], ['advanced', '高级参数', '生成长度、记忆与请求设置', 'slider.horizontal.3']]],
+              ['应用', [['about', '关于', '版本信息与应用更新', 'info.circle']]],
+            ] as const).map(([group, items]) => <View key={group} style={styles.mobileOverviewGroup}><MobileSectionTitle title={group} />{items.map(([key, label, description, icon]) => <Pressable key={`${key}-${label}`} accessibilityRole="button" onPress={() => setMobileSection(key as typeof mobileSection)} style={({ pressed }) => [styles.mobileSettingsRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.outlineVariant }, pressed && mobileStyles.pressed]}><View style={[styles.mobileSettingsIcon, { backgroundColor: theme.accentMuted }]}><MobileIcon name={{ ios: icon, android: ({ paintpalette: 'palette', link: 'link', photo: 'image', 'arrow.down.to.line': 'file_download', 'slider.horizontal.3': 'tune', 'info.circle': 'info' } as const)[icon], web: ({ paintpalette: 'palette', link: 'link', photo: 'image', 'arrow.down.to.line': 'file_download', 'slider.horizontal.3': 'tune', 'info.circle': 'info' } as const)[icon] }} size={22} /></View><View style={styles.mobileSettingsCopy}><ThemedText type="smallBold">{label}</ThemedText><ThemedText type="small" themeColor="textSecondary">{description}</ThemedText></View><MobileIcon name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} color={theme.textMuted} /></Pressable>)}</View>)}
+          </View> : null}
 
-          <AccordionSection
+          {(Platform.OS === 'web' || mobileSection === 'appearance') && <SettingsSection
             title="外观"
             sectionNumber="01"
             description="叙事观测仪的明暗模式与界面动画"
@@ -350,9 +367,9 @@ export default function SettingsScreen() {
             <ThemedText type="small" themeColor="textMuted">
               「跟随系统」时与手机浅色 / 深色同步。
             </ThemedText>
-          </AccordionSection>
+          </SettingsSection>}
 
-          <AccordionSection
+          {(Platform.OS === 'web' || mobileSection === 'models') && <SettingsSection
             title="模型连接"
             sectionNumber="02"
             description="厂商地址、密钥与可用模型列表"
@@ -380,7 +397,7 @@ export default function SettingsScreen() {
                     { backgroundColor: theme.accent },
                     pressed && styles.pressed,
                   ]}>
-                  <ThemedText type="smallBold" style={styles.primaryButtonText}>
+                  <ThemedText type="smallBold" style={[styles.primaryButtonText, { color: theme.onPrimary }]}>
                     + 新增厂商
                   </ThemedText>
                 </Pressable>
@@ -487,9 +504,9 @@ export default function SettingsScreen() {
               </>
             )}
 
-          </AccordionSection>
+          </SettingsSection>}
 
-          <AccordionSection
+          {(Platform.OS === 'web' || mobileSection === 'images') && <SettingsSection
             title="图像引擎"
             sectionNumber="03"
             description="独立配置本地或远程图像接口"
@@ -615,13 +632,14 @@ export default function SettingsScreen() {
                 尚未配置图像连接，请点击「+ 新增」添加一条图像连接。
               </ThemedText>
             )}
-          </AccordionSection>
+          </SettingsSection>}
 
-          <AccordionSection
+          {(Platform.OS === 'web' || mobileSection === 'export' || mobileSection === 'advanced') && <SettingsSection
             title="导出与高级"
             sectionNumber="04"
             description="正文文件、生成预算与请求稳定性"
             variant="settings">
+            {(Platform.OS === 'web' || mobileSection === 'export') ? <>
             <ThemedText type="small" themeColor="textMuted">
               只导出 AI 正文，不含你的输入；状态栏与行动预测（建议路线）会自动去掉。
             </ThemedText>
@@ -706,7 +724,7 @@ export default function SettingsScreen() {
                     { flex: 1, backgroundColor: theme.accent },
                     pressed && styles.pressed,
                   ]}>
-                  <ThemedText type="smallBold" style={styles.primaryButtonText}>
+                  <ThemedText type="smallBold" style={[styles.primaryButtonText, { color: theme.onPrimary }]}>
                     {exportSettings.directoryUri ? '更换文件夹' : '选择文件夹'}
                   </ThemedText>
                 </Pressable>
@@ -732,7 +750,8 @@ export default function SettingsScreen() {
                 当前平台不支持固定路径；导出时在分享面板选择阅读 App。
               </ThemedText>
             )}
-            <AccordionSection title="高级参数">
+            </> : null}
+            {(Platform.OS === 'web' || mobileSection === 'advanced') ? <SettingsSection title="高级参数">
             <ThemedText type="small" themeColor="textMuted">
               生成长度与稳定性相关选项，一般保持默认即可。
             </ThemedText>
@@ -821,9 +840,9 @@ export default function SettingsScreen() {
                 updateGenerationSettings({ continuationOnTruncation })
               }
             />
-            </AccordionSection>
-          </AccordionSection>
-          <AppAboutPanel />
+            </SettingsSection> : null}
+          </SettingsSection>}
+            {(Platform.OS === 'web' || mobileSection === 'about') && <AppAboutPanel />}
         </ScrollView>
       </SafeAreaView>
 
@@ -976,6 +995,11 @@ export default function SettingsScreen() {
   );
 }
 
+function SettingsSection(props: ComponentProps<typeof AccordionSection>) {
+  if (Platform.OS === 'web') return <AccordionSection {...props} />;
+  return <View style={{ gap: 16 }}>{props.children}</View>;
+}
+
 type SettingFieldProps = {
   label: string;
   value: string;
@@ -1038,6 +1062,11 @@ const IMAGE_PROTOCOL_OPTIONS: { value: ImageProviderProtocol; label: string; des
 ];
 
 const styles = StyleSheet.create({
+  mobileOverview: { gap: 22 },
+  mobileOverviewGroup: { gap: 8 },
+  mobileSettingsRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#C8A892', paddingVertical: 10 },
+  mobileSettingsIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  mobileSettingsCopy: { flex: 1, gap: 3 },
   container: {
     alignItems: 'center',
     flex: 1,

@@ -19,7 +19,7 @@ function TabIcon({ color, focused, label, name }: TabIconProps) {
     <View style={styles.iconFrame}>
       <SymbolView
         name={name}
-        size={20}
+        size={23}
         weight={focused ? 'bold' : 'regular'}
         tintColor={color}
         fallback={
@@ -53,21 +53,14 @@ export default function TabsLayout() {
           borderColor: theme.outlineVariant,
           borderWidth: StyleSheet.hairlineWidth,
           borderTopWidth: StyleSheet.hairlineWidth,
-          borderRadius: 22,
-          marginHorizontal: 14,
-          marginBottom: dockBottom,
-          height: Platform.select({ ios: 72, android: 68, web: 70 }),
-          paddingTop: 6,
-          paddingBottom: 7,
-          shadowColor: theme.shadow,
-          shadowOpacity: 0.16,
-          shadowRadius: 20,
-          shadowOffset: { width: 0, height: 8 },
-          elevation: 14,
+          height: 66 + dockBottom,
+          paddingTop: 7,
+          paddingBottom: dockBottom + 5,
+          elevation: 0,
         },
         tabBarItemStyle: {
-          marginHorizontal: 3,
-          borderRadius: 16,
+          marginHorizontal: 5,
+          borderRadius: 12,
         },
         tabBarActiveBackgroundColor: theme.primaryContainer,
         tabBarHideOnKeyboard: true,
@@ -87,7 +80,7 @@ export default function TabsLayout() {
               color={color}
               focused={focused}
               label="N"
-              name={{ ios: 'books.vertical.fill', android: 'menu_book', web: 'menu_book' }}
+              name={{ ios: 'book', android: 'menu_book', web: 'menu_book' }}
             />
           ),
         }}
@@ -115,7 +108,7 @@ export default function TabsLayout() {
               color={color}
               focused={focused}
               label="T"
-              name={{ ios: 'terminal.fill', android: 'terminal', web: 'terminal' }}
+              name={{ ios: 'flask', android: 'science', web: 'science' }}
             />
           ),
         }}
@@ -129,7 +122,7 @@ export default function TabsLayout() {
               color={color}
               focused={focused}
               label="S"
-              name={{ ios: 'gearshape.fill', android: 'settings', web: 'settings' }}
+              name={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
             />
           ),
         }}

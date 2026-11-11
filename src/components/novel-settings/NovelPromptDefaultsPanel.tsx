@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
 import { ThemedText } from '@/components/themed-text';
@@ -12,6 +12,7 @@ import {
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useTavernStore } from '@/store/tavern-store';
+import { MobileAction, MobileSectionTitle } from '@/components/mobile/MobileUI';
 
 /**
  * Memory prompt defaults — edited in「小说配置」.
@@ -21,6 +22,21 @@ export function NovelPromptDefaultsPanel() {
   const theme = useTheme();
   const novelPromptDefaults = useTavernStore((state) => state.novelPromptDefaults);
   const updateNovelPromptDefaults = useTavernStore((state) => state.updateNovelPromptDefaults);
+
+  const fields = [
+    ['近期（每轮压缩）', novelPromptDefaults.shortTermMemoryPrompt, DEFAULT_SHORT_TERM_MEMORY_PROMPT, (shortTermMemoryPrompt: string) => updateNovelPromptDefaults({ shortTermMemoryPrompt })],
+    ['过往（近期满批合并）', novelPromptDefaults.midTermMemoryPrompt, DEFAULT_MID_TERM_MEMORY_PROMPT, (midTermMemoryPrompt: string) => updateNovelPromptDefaults({ midTermMemoryPrompt })],
+    ['长期总结（过往满批合并）', novelPromptDefaults.longTermMemoryPrompt, DEFAULT_LONG_TERM_MEMORY_PROMPT, (longTermMemoryPrompt: string) => updateNovelPromptDefaults({ longTermMemoryPrompt })],
+  ] as const;
+
+  if (Platform.OS !== 'web') {
+    return <View style={styles.mobilePanel}>
+      <MobileSectionTitle title="记忆规则" />
+      <ThemedText type="small" themeColor="textMuted">8-5-1 阶梯：每轮写入近期；满 {SHORT_TERM_MEMORY_BATCH_SIZE} 条并入过往；过往满 {MID_TERM_MEMORY_BATCH_SIZE} 条并入长期总结。</ThemedText>
+      {fields.map(([label, value, placeholder, onChange]) => <View key={label} style={styles.mobileField}><ThemedText type="smallBold">{label}</ThemedText><TextInput value={value} onChangeText={onChange} placeholder={placeholder} placeholderTextColor={theme.textMuted} multiline textAlignVertical="top" style={[styles.input, styles.mobileTextArea, { backgroundColor: theme.backgroundElement, borderColor: theme.border, color: theme.text }]} /></View>)}
+      <MobileAction label="恢复默认" variant="secondary" onPress={() => updateNovelPromptDefaults({ shortTermMemoryPrompt: DEFAULT_SHORT_TERM_MEMORY_PROMPT, midTermMemoryPrompt: DEFAULT_MID_TERM_MEMORY_PROMPT, longTermMemoryPrompt: DEFAULT_LONG_TERM_MEMORY_PROMPT })} />
+    </View>;
+  }
 
   return (
     <AccordionSection
@@ -127,6 +143,9 @@ export function NovelPromptDefaultsPanel() {
 }
 
 const styles = StyleSheet.create({
+  mobilePanel: { gap: Spacing.three },
+  mobileField: { gap: Spacing.two },
+  mobileTextArea: { minHeight: 150, borderRadius: 12, padding: Spacing.three, fontSize: 16, lineHeight: 24 },
   input: {
     borderWidth: 1,
     borderRadius: 16,
