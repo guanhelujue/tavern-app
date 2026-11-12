@@ -50,7 +50,6 @@ export function NovelChapterEditorModal({
   const desktop = useDesktopLayout();
   const insets = useSafeAreaInsets();
   const novel = useTavernStore((state) => state.novels.find((item) => item.id === novelId));
-  const updateNovelChapter = useTavernStore((state) => state.updateNovelChapter);
   const finalizeNovelChapter = useTavernStore((state) => state.finalizeNovelChapter);
   const deleteNovelChapter = useTavernStore((state) => state.deleteNovelChapter);
   const auditNovelChapter = useTavernStore((state) => state.auditNovelChapter);
@@ -58,6 +57,7 @@ export function NovelChapterEditorModal({
   const reviseNovelChapter = useTavernStore((state) => state.reviseNovelChapter);
   const backupNovelChapter = useTavernStore((state) => state.backupNovelChapter);
   const rollbackNovelChapter = useTavernStore((state) => state.rollbackNovelChapter);
+  const saveNovelChapter = useTavernStore((state) => state.saveNovelChapter);
 
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
@@ -76,6 +76,7 @@ export function NovelChapterEditorModal({
   const activeOperation = useRef<number | null>(null);
   const editorKey = useRef<string | null>(null);
   const closePending = useRef(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     if (!visible || !chapter) {
@@ -176,15 +177,34 @@ export function NovelChapterEditorModal({
     onClose();
   }
 
-  function handleSave() {
-    if (activeOperation.current !== null) return;
-    updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
-    setIsDirty(false);
-    showAppAlert('已保存', '章节内容已更新。');
+  async function saveDraft(token: number) {
+    if (!isCurrentOperation(token)) return false;
+    savingRef.current = true;
+    try {
+      await saveNovelChapter(novelId, { ...activeChapter, title, summary, goal, content });
+      if (!isCurrentOperation(token)) return false;
+      setIsDirty(false);
+      return true;
+    } finally {
+      savingRef.current = false;
+    }
+  }
+
+  async function handleSave() {
+    const token = beginOperation('finalize');
+    if (token === null) return;
+    try {
+      await saveDraft(token);
+      if (isCurrentOperation(token)) showAppAlert('已保存', '章节内容已更新。');
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert('保存失败', error instanceof Error ? error.message : '章节保存失败，请重试。');
+    } finally {
+      finishOperation(token);
+    }
   }
 
   async function requestClose() {
-    if (closePending.current) return;
+    if (closePending.current || savingRef.current) return;
     Keyboard.dismiss();
     if (!isDirty && !candidate) {
       closeEditor();
@@ -205,8 +225,8 @@ export function NovelChapterEditorModal({
     if (token === null) return;
     try {
       if (isDirty) {
-        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
-        setIsDirty(false);
+        await saveDraft(token);
+        if (!isCurrentOperation(token)) return;
       }
       const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
       const savedChapter = latest?.chapters?.find((item) => item.id === activeChapter.id);
@@ -263,8 +283,8 @@ export function NovelChapterEditorModal({
     if (token === null) return;
     try {
       if (isDirty) {
-        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
-        setIsDirty(false);
+        await saveDraft(token);
+        if (!isCurrentOperation(token)) return;
       }
       await auditNovelChapter(novelId, activeChapter.id);
       if (isCurrentOperation(token)) showAppAlert('审查完成', '已生成该章审查报告，可在下方查看。');
@@ -284,8 +304,8 @@ export function NovelChapterEditorModal({
     try {
       // 未保存的编辑先落库，确保基于最新正文修订。
       if (isDirty) {
-        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
-        setIsDirty(false);
+        await saveDraft(token);
+        if (!isCurrentOperation(token)) return;
       }
       // 复用 8 维 LLM 审查：无记录时先生成一次。
       const hasRewriteAudit = rewriteAudits.some(auditIsCurrent);
@@ -326,8 +346,8 @@ export function NovelChapterEditorModal({
     if (token === null) return;
     try {
       if (isDirty) {
-        updateNovelChapter(novelId, activeChapter.id, { title, summary, goal, content });
-        setIsDirty(false);
+        await saveDraft(token);
+        if (!isCurrentOperation(token)) return;
       }
       const state = useTavernStore.getState();
       const current = state.novels.find((item) => item.id === novelId);
@@ -346,7 +366,7 @@ export function NovelChapterEditorModal({
     } finally { finishOperation(token); }
   }
 
-  function adoptCandidate() {
+  async function adoptCandidate() {
     if (!candidate || operation) return;
     const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
     const saved = latest?.chapters?.find((item) => item.id === activeChapter.id);
@@ -354,10 +374,18 @@ export function NovelChapterEditorModal({
       showAppAlert('候选已过期', '生成后正文或作品设定发生了变化，请保存当前修改并重新生成候选。');
       return;
     }
-    backupNovelChapter(novelId, activeChapter.id);
-    updateNovelChapter(novelId, activeChapter.id, { content: candidate.content, summary: '' });
-    setContent(candidate.content); setSummary(''); setCandidate(null); setIsDirty(false);
-    showAppAlert('已采纳为草稿', '原稿已备份；摘要和审查需要根据新正文重新生成。');
+    const token = beginOperation('candidate');
+    if (token === null) return;
+    try {
+      savingRef.current = true;
+      backupNovelChapter(novelId, activeChapter.id);
+      await saveNovelChapter(novelId, { ...saved, content: candidate.content, summary: '', status: 'draft' });
+      if (!isCurrentOperation(token)) return;
+      setContent(candidate.content); setSummary(''); setCandidate(null); setIsDirty(false);
+      showAppAlert('已采纳为草稿', '原稿已备份；摘要和审查需要根据新正文重新生成。');
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert('保存候选失败', error instanceof Error ? error.message : '候选保存失败，请重试。');
+    } finally { savingRef.current = false; finishOperation(token); }
   }
 
   async function handleRollback(backupId: string) {
@@ -366,9 +394,13 @@ export function NovelChapterEditorModal({
     try {
       const confirmed = await confirmAppAction('回退版本', '将恢复备份中的正文和章节信息；已定稿章节会成为草稿，需要重新采纳定稿。确定吗？', { confirmLabel: '回退' });
       if (!confirmed || !isCurrentOperation(token)) return;
-      rollbackNovelChapter(novelId, activeChapter.id, backupId);
-      setIsDirty(false);
+      savingRef.current = true;
+      await rollbackNovelChapter(novelId, activeChapter.id, backupId);
+      if (isCurrentOperation(token)) setIsDirty(false);
+    } catch (error) {
+      if (isCurrentOperation(token)) showAppAlert('回退失败', error instanceof Error ? error.message : '章节回退失败，请重试。');
     } finally {
+      savingRef.current = false;
       finishOperation(token);
     }
   }

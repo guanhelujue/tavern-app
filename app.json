@@ -2,7 +2,7 @@
   "expo": {
     "name": "酒馆",
     "slug": "tavern-app",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "tavernapp",
@@ -12,7 +12,7 @@
       "supportsTablet": false
     },
     "android": {
-      "versionCode": 5,
+      "versionCode": 6,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize",
       "package": "com.guanhelujue.tavernapp",

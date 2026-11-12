@@ -64,6 +64,11 @@ export function splitNovelTextIntoChapters(rawText: string): ImportedNovelChapte
 
   const chapters: ImportedNovelChapter[] = [];
 
+  const preface = lines.slice(0, headings[0].lineIndex).join('\n').trim();
+  if (preface) {
+    chapters.push({ title: '序言', content: preface });
+  }
+
   headings.forEach((heading, index) => {
     const start = heading.lineIndex + 1;
     const end = index + 1 < headings.length ? headings[index + 1].lineIndex : lines.length;

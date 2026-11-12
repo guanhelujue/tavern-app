@@ -48,11 +48,7 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# Tests and development-only harnesses
-**/*.test.*
-**/*.spec.*
-**/__tests__/
-vitest.config.*
+# Development-only harnesses
 /prototypes/
 /real-device-clipboard/
 

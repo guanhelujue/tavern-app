@@ -1,4 +1,3 @@
-import { NOVEL_LOOKBACK_MAX } from '@/constants/novel-continuation';
 import { resolveNovelSystemPrompt } from '@/constants/novel-memory';
 import { REWRITE_NET_IMPROVEMENT_EPSILON, REWRITE_PASS_SCORE } from '@/constants/novel-story-state';
 import type {
@@ -287,8 +286,9 @@ export function buildRewriteContext(input: RewriteContextInput): {
   }
 
   // ── 可压缩层：近 N 章正文片段 ───────────────────────────────────────────
-  const lookback = Math.min(input.recentChapters.length, NOVEL_LOOKBACK_MAX);
-  const window = input.recentChapters.slice(-lookback);
+  // The caller selects the lookback window; zero means all finalized chapters.
+  // The combined prompt below is still bounded by maxContextChars.
+  const window = input.recentChapters;
   if (window.length > 0) {
     compressibleParts.push(
       `【近期正文片段】\n${window

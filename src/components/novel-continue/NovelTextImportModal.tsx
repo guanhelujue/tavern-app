@@ -5,9 +5,6 @@ import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
 import { useTavernStore } from '@/store/tavern-store';
 import { pickNovelTextFile, type ImportedNovelText } from '@/utils/novel-import';
-import { buildImportedNovelChapters, validateNovelTextImport } from '@/utils/novel-text-import';
-import { buildLegacyNovelChapters } from '@/utils/novel-legacy-chapters';
-import { getActiveNovelRequestId, isNovelMutationActive } from '@/services/novel-request-lifecycle';
 
 export function NovelTextImportModal({ novelId, visible, onClose, onImported }: { novelId: string; visible: boolean; onClose: () => void; onImported?: () => void }) {
   const theme = useTheme();
@@ -24,6 +21,7 @@ export function NovelTextImportModal({ novelId, visible, onClose, onImported }: 
   }
 
   function close() {
+    if (busy || confirmRef.current) return;
     reset();
     onClose();
   }
@@ -38,23 +36,16 @@ export function NovelTextImportModal({ novelId, visible, onClose, onImported }: 
   async function confirm() {
     if (busy || confirmRef.current || !selected) return;
     confirmRef.current = true;
-    const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
-    if (!latest) { setError('作品不存在。'); confirmRef.current = false; return; }
-    const legacy = buildLegacyNovelChapters(novelId, useTavernStore.getState().novelConversations[novelId] ?? [], latest.chapters ?? []);
-    const validation = validateNovelTextImport({ imported: selected, existingChapters: latest.chapters ?? [], generationJobs: latest.novelGenerationJobs ?? [], legacyChapters: legacy });
-    if (!validation.ok) { setError(validation.reason); confirmRef.current = false; return; }
-    if (isNovelMutationActive(novelId) || getActiveNovelRequestId(novelId)) { setError('当前作品正在保存或生成，请稍后再导入。'); confirmRef.current = false; return; }
     setBusy(true); setError('');
     try {
-      const chapters = buildImportedNovelChapters(selected.chapters, latest.chapters ?? []);
-      useTavernStore.getState().updateNovel(novelId, { chapters: [...(latest.chapters ?? []), ...chapters] });
+      await useTavernStore.getState().importNovelText(novelId, selected);
       setSelected(null); onImported?.(); onClose();
     } catch (cause) { setError(cause instanceof Error ? cause.message : '导入失败，请稍后重试。'); confirmRef.current = false; } finally { setBusy(false); }
   }
 
   return <Modal visible={visible} transparent animationType="slide" onRequestClose={close} onDismiss={reset}>
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
-      <View style={styles.header}><View style={styles.headerCopy}><ThemedText type="subtitle">导入正文</ThemedText><ThemedText type="small" themeColor="textSecondary">追加到当前作品，原有章节不会被覆盖。</ThemedText></View><Pressable accessibilityRole="button" onPress={close} style={styles.button}><ThemedText>关闭</ThemedText></Pressable></View>
+      <View style={styles.header}><View style={styles.headerCopy}><ThemedText type="subtitle">导入正文</ThemedText><ThemedText type="small" themeColor="textSecondary">追加到当前作品，原有章节不会被覆盖。</ThemedText></View><Pressable accessibilityRole="button" disabled={busy} onPress={close} style={[styles.button, busy && styles.disabled]}><ThemedText>关闭</ThemedText></Pressable></View>
       <ScrollView contentContainerStyle={styles.content}>
         <ThemedText type="small" themeColor="textSecondary">文件会按章节标题识别并作为已定稿章节追加。导入前请先处理草稿、生成任务和未整理聊天正文。</ThemedText>
         <Pressable accessibilityRole="button" disabled={busy} onPress={() => void choose()} style={({ pressed }) => [styles.button, { borderColor: theme.outlineVariant }, pressed && styles.pressed, busy && styles.disabled]}><ThemedText type="smallBold">{busy ? '正在读取…' : '选择 TXT / Markdown 文件'}</ThemedText></Pressable>

@@ -53,6 +53,8 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
   const [stream, setStream] = useState('');
   const [advancedId, setAdvancedId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
   const selected = chapters.find((chapter) => chapter.id === selectedId);
   const continuationIntent = Boolean(inspiration && isChapterContinuationIntent(inspiration.content));
   const legacy = useMemo(() => buildLegacyNovelChapters(novelId, messages, chapters), [novelId, messages, chapters]);
@@ -78,17 +80,18 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
     if (selectedId) void hydrateChapter(selectedId).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : '正文加载失败。'));
   }, [selectedId, hydrateChapter]);
 
-  usePreventRemove(dirty, ({ data }) => {
+  usePreventRemove(dirty || isSaving, ({ data }) => {
+    if (savingRef.current) return;
     void confirmAppAction('离开章节', '当前章节有未保存的修改，确定放弃修改并离开？').then((confirmed) => {
       if (confirmed) navigation.dispatch(data.action);
     });
   });
   useEffect(() => {
-    if (Platform.OS !== 'web' || !dirty) return;
+    if (Platform.OS !== 'web' || (!dirty && !isSaving)) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [dirty, isSaving]);
 
   function openChapter(id: string) {
     router.push(`/novel/chapters/${novelId}?chapterId=${encodeURIComponent(id)}`);
@@ -100,17 +103,27 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
     navigation.setParams({ chapterId: id, inspirationId: undefined });
   }
 
-  function save(draft: Draft) {
+  async function save(draft: Draft) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    setOperation(true);
     const state = useTavernStore.getState();
-    if (selected) {
-      state.updateNovelChapter(novelId, selected.id, { ...draft, title: draft.title.trim() || `第${selected.index}章` });
-    } else {
-      const now = new Date().toISOString();
-      const id = generateId('chapter');
-      state.addNovelChapter(novelId, { ...draft, id, index: manualIndex, title: draft.title.trim() || `第${manualIndex}章`, status: 'draft', contentStatus: 'loaded', aiGenerated: false, createdAt: now, updatedAt: now });
-      showSavedChapter(id);
+    const now = new Date().toISOString();
+    const chapter = selected
+      ? { ...selected, ...draft, title: draft.title.trim() || `第${selected.index}章` }
+      : { ...draft, id: generateId('chapter'), index: manualIndex, title: draft.title.trim() || `第${manualIndex}章`, status: 'draft' as const, contentStatus: 'loaded' as const, aiGenerated: false, createdAt: now, updatedAt: now };
+    try {
+      await state.saveNovelChapter(novelId, chapter);
+      if (!mounted.current) return;
+      showSavedChapter(chapter.id);
+      setDirty(false); setError('');
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : '章节保存失败，请重试。');
+    } finally {
+      savingRef.current = false;
+      if (mounted.current) { setOperation(false); setIsSaving(false); }
     }
-    setDirty(false); setError('');
   }
 
   async function generate(draft: Draft) {
@@ -137,12 +150,17 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
         userInstruction: draft.goal.trim() || undefined,
         planning: draft.planning,
         targetWords: draft.targetWords,
-        onDelta: (delta) => setStream((current) => current + delta),
+        onDelta: (delta) => { if (mounted.current) setStream((current) => current + delta); },
       });
       if (id) {
-        if (draft.title.trim() || draft.summary.trim()) state.updateNovelChapter(novelId, id, {
-          ...(draft.title.trim() ? { title: draft.title.trim() } : {}), summary: draft.summary,
-        });
+        if (draft.title.trim() || draft.summary.trim()) {
+          const generated = useTavernStore.getState().novels.find((item) => item.id === novelId)?.chapters?.find((item) => item.id === id);
+          if (generated) await state.saveNovelChapter(novelId, {
+            ...generated,
+            ...(draft.title.trim() ? { title: draft.title.trim() } : {}),
+            summary: draft.summary,
+          });
+        }
         showSavedChapter(id);
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : '章节生成失败，请检查模型设置后重试。'); }
@@ -150,20 +168,32 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
       // A failed request still checkpoints a real chapter. Display that saved draft.
       const latest = useTavernStore.getState().novels.find((item) => item.id === novelId);
       const job = latest?.novelGenerationJobs?.find((item) => item.kind === 'write' && !previousJobs.has(item.jobId));
-      if (job?.chapterId && latest?.chapters?.some((chapter) => chapter.id === job.chapterId)) showSavedChapter(job.chapterId);
-      setStream(''); setOperation(false);
+      if (mounted.current) {
+        if (job?.chapterId && latest?.chapters?.some((chapter) => chapter.id === job.chapterId)) showSavedChapter(job.chapterId);
+        setStream(''); setOperation(false);
+      }
     }
   }
 
   async function importLegacy() {
-    if (busy || !legacy.length) return;
+    if (busy || savingRef.current || !legacy.length) return;
     if (dirty && !await confirmAppAction('整理旧正文', '当前章节有未保存的修改，继续将放弃这些修改。')) return;
     if (!await confirmAppAction('将旧正文整理为章节', `将 ${legacy.length} 条完整的正文回复各整理为一章，上一条输入作为本章提示词。章节先保存为草稿；原对话记录保留。可在整理后调整标题与分章。`)) return;
     const state = useTavernStore.getState();
     const current = state.novels.find((item) => item.id === novelId);
     const pending = buildLegacyNovelChapters(novelId, state.novelConversations[novelId] ?? [], current?.chapters ?? []);
-    pending.forEach((chapter) => state.addNovelChapter(novelId, chapter));
-    setDirty(false); setError('');
+    savingRef.current = true;
+    setIsSaving(true);
+    setOperation(true);
+    try {
+      await state.appendNovelChapters(novelId, pending);
+      if (mounted.current) { setDirty(false); setError(''); }
+    } catch (cause) {
+      if (mounted.current) setError(cause instanceof Error ? cause.message : '整理旧正文失败，请重试。');
+    } finally {
+      savingRef.current = false;
+      if (mounted.current) { setOperation(false); setIsSaving(false); }
+    }
   }
 
   async function exportBackup() {
@@ -198,7 +228,7 @@ export function DesktopChapterWorkspace({ novelId, inspirationId, chapterId, out
       const id = await (retry ? state.retryNovelGenerationJob : state.resumeNovelGenerationJob)(novelId, pausedJob.jobId);
       if (id) showSavedChapter(id);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '恢复失败。'); }
-    finally { setOperation(false); setStream(''); }
+    finally { if (mounted.current) { setOperation(false); setStream(''); } }
   }
 
   if (!novel) return <View style={styles.empty}><ThemedText>小说不存在。</ThemedText></View>;

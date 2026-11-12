@@ -216,6 +216,9 @@ import { filterBoundGlobalWorldbook } from '@/utils/worldbook';
 import {
   normalizeNovelConversation,
 } from '@/utils/session-config';
+import { buildImportedNovelChapters, validateNovelTextImport } from '@/utils/novel-text-import';
+import { buildLegacyNovelChapters } from '@/utils/novel-legacy-chapters';
+import type { ImportedNovelText } from '@/utils/novel-import';
 import { stripNovelChapterExpansion } from '@/utils/novel-chapter-expansion';
 import { normalizeNovelUserInput } from '@/utils/novel-user-input';
 import {
@@ -261,6 +264,7 @@ import {
   enqueueNovelWrite,
   writeNovelMetadataInDatabase,
   persistNovelChapter,
+  persistNovelChapterChanges,
   persistNovelMetadata,
   removeNovelChapterFromDatabase,
   removeNovelFromDatabase,
@@ -938,7 +942,11 @@ type TavernActions = {
     updates: Partial<Pick<Novel, 'chatBackgroundUri' | 'chatBackgroundOpacity'>>,
   ) => void;
   // ── Novel continuation workbench ──────────────────────────────────────────
-  /** Add a chapter (draft or final). */
+  /** Explicit user saves wait for durable storage before publishing changes. */
+  saveNovelChapter: (novelId: string, chapter: NovelChapter) => Promise<void>;
+  appendNovelChapters: (novelId: string, chapters: NovelChapter[]) => Promise<void>;
+  importNovelText: (novelId: string, imported: ImportedNovelText) => Promise<void>;
+  /** Add a chapter (draft or final) as a streaming checkpoint. */
   addNovelChapter: (novelId: string, chapter: NovelChapter) => void;
   /** Update a chapter's editable fields in place. */
   updateNovelChapter: (
@@ -1007,7 +1015,7 @@ type TavernActions = {
   /** Push a versioned backup of a chapter's current content. */
   backupNovelChapter: (novelId: string, chapterId: string) => void;
   /** Restore a chapter from a backup entry. */
-  rollbackNovelChapter: (novelId: string, chapterId: string, backupId: string) => void;
+  rollbackNovelChapter: (novelId: string, chapterId: string, backupId: string) => Promise<void>;
   // ── AI continuation pipeline (async orchestrators) ─────────────────────────
   /** Run rule audit + LLM fact-check on a chapter and persist the report. */
   auditNovelChapter: (novelId: string, chapterId: string) => Promise<void>;
@@ -2500,13 +2508,13 @@ export const useTavernStore = create<TavernStore>()(
                           ? input.defaultProviderId?.trim() || undefined
                           : existing.defaultProviderId,
                       coverImageUri:
-                        input.coverImageUri !== undefined
+                        Object.prototype.hasOwnProperty.call(input, 'coverImageUri')
                           ? input.coverImageUri?.trim()
                             ? toStoredNovelImageRef(input.coverImageUri.trim())
                             : undefined
                           : existing.coverImageUri,
                       chatBackgroundUri:
-                        input.chatBackgroundUri !== undefined
+                        Object.prototype.hasOwnProperty.call(input, 'chatBackgroundUri')
                           ? input.chatBackgroundUri?.trim()
                             ? toStoredNovelImageRef(input.chatBackgroundUri.trim())
                             : undefined
@@ -4392,6 +4400,29 @@ export const useTavernStore = create<TavernStore>()(
           };
         }),
       // ── Novel continuation workbench (sync CRUD) ────────────────────────────
+      saveNovelChapter: (novelId, chapter) => saveChapterChanges(novelId, (novel) => {
+        const existing = novel.chapters?.find((item) => item.id === chapter.id);
+        if (existing && existing.updatedAt !== chapter.updatedAt) throw new Error('章节已更新，请重新打开后再保存。');
+        if (existing && existing.contentStatus && existing.contentStatus !== 'loaded') throw new Error('请等待章节正文加载完成后再保存。');
+        if (novel.chapters?.some((item) => item.id !== chapter.id && item.index === chapter.index)) throw new Error('该章号已存在，请重新打开章节目录。');
+        return [{ ...chapter, status: 'draft', contentStatus: 'loaded', updatedAt: nowIso() }];
+      }),
+      appendNovelChapters: (novelId, chapters) => saveChapterChanges(novelId, (novel) => {
+        const ids = new Set(novel.chapters?.map((chapter) => chapter.id));
+        const indexes = new Set(novel.chapters?.map((chapter) => chapter.index));
+        for (const chapter of chapters) {
+          if (ids.has(chapter.id) || indexes.has(chapter.index)) throw new Error('章节已存在，请重新打开目录后重试。');
+          ids.add(chapter.id); indexes.add(chapter.index);
+        }
+        return chapters.map((chapter) => ({ ...chapter, contentStatus: 'loaded' }));
+      }),
+      importNovelText: (novelId, imported) => saveChapterChanges(novelId, (novel) => {
+        const legacy = buildLegacyNovelChapters(novelId, get().novelConversations[novelId] ?? [], novel.chapters ?? []);
+        const validation = validateNovelTextImport({ imported, existingChapters: novel.chapters,
+          generationJobs: novel.novelGenerationJobs, legacyChapters: legacy });
+        if (!validation.ok) throw new Error(validation.reason);
+        return buildImportedNovelChapters(imported.chapters, novel.chapters ?? []);
+      }),
       addNovelChapter: (novelId, chapter) => {
         set((state) => ({
           novels: state.novels.map((novel) =>
@@ -4919,14 +4950,15 @@ export const useTavernStore = create<TavernStore>()(
             };
           }),
         })),
-      rollbackNovelChapter: (novelId, chapterId, backupId) => {
+      rollbackNovelChapter: async (novelId, chapterId, backupId) => {
         const novel = get().novels.find((item) => item.id === novelId);
         const backup = novel?.chapterBackups?.find(
           (item) => item.id === backupId && item.chapterId === chapterId,
         );
         if (!backup || !novel?.chapters?.some((item) => item.id === chapterId)) return;
         // Use the same draft, invalidation and database path as a manual edit.
-        get().updateNovelChapter(novelId, chapterId, {
+        await get().saveNovelChapter(novelId, {
+          ...novel.chapters!.find((item) => item.id === chapterId)!,
           title: backup.title,
           content: backup.content,
           ...(typeof backup.summary === 'string' ? { summary: backup.summary } : {}),
@@ -5699,6 +5731,7 @@ export const useTavernStore = create<TavernStore>()(
         });
       },
       rewriteNovelNextChapter: async (novelId, options) => {
+        if (isNovelMutationActive(novelId)) throw new Error('当前作品正在保存，请稍后再生成。');
         const state = useTavernStore.getState();
         const novel = state.novels.find((item) => item.id === novelId);
 
@@ -5728,7 +5761,7 @@ export const useTavernStore = create<TavernStore>()(
           ? (novel.novelForecasts ?? []).find((item) => item.forecastId === plan.forecastId) ?? null
           : null;
         const initialFinalChapters = getFinalChapters(novel);
-        const hydrationCount = Math.max(1, settings.lookbackChapters);
+        const hydrationCount = settings.lookbackChapters === 0 ? initialFinalChapters.length : Math.max(1, settings.lookbackChapters);
         await Promise.all(initialFinalChapters.slice(-hydrationCount).map((chapter) =>
           useTavernStore.getState().hydrateNovelChapterContent(chapter.id),
         ));
@@ -5847,7 +5880,7 @@ export const useTavernStore = create<TavernStore>()(
           forecast,
           lastChapter,
           recentChapters: settings.lookbackChapters === 0
-            ? []
+            ? baseChapters
             : baseChapters.slice(-settings.lookbackChapters),
           userGuide,
           targetWords,
@@ -6247,7 +6280,7 @@ export const useTavernStore = create<TavernStore>()(
         if (!adopted) return { adopted: false, score: reAudit.score };
 
         get().backupNovelChapter(novelId, chapterId);
-        get().updateNovelChapter(novelId, chapterId, { content: revised.content });
+        await get().saveNovelChapter(novelId, { ...latestChapter, content: revised.content });
         const newAudit: NovelRewriteAudit = {
           auditId: makeId('rewrite-audit'),
           chapterId,
@@ -8003,8 +8036,40 @@ async function buildCompleteNovelBackup(novelId: string): Promise<ChatSessionExp
   } finally { release(); }
 }
 
+/** Reserve the book, save all bodies atomically, then expose the saved version. */
+async function saveChapterChanges(novelId: string, build: (novel: Novel) => NovelChapter[]) {
+  assertSessionStorageReady();
+  const release = beginNovelMutation(novelId);
+  if (!release) throw new Error('当前作品正在保存或生成，请稍后重试。');
+  try {
+    const state = useTavernStore.getState();
+    const novel = state.novels.find((item) => item.id === novelId);
+    if (!novel) throw new Error('作品不存在。');
+    if (novel.novelGenerationJobs?.some((job) => job.status === 'running')) throw new Error('当前作品正在生成，请稍后重试。');
+    const chapters = build(novel);
+    if (!chapters.length) return;
+    const byId = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+    const updatedAt = nowIso();
+    const applyChanges = (current: Novel) => markNovelChapterStateStale({
+      ...current,
+      chapters: [
+        ...(current.chapters ?? []).map((chapter) => byId.get(chapter.id) ?? chapter),
+        ...chapters.filter((chapter) => !current.chapters?.some((item) => item.id === chapter.id)),
+      ],
+      updatedAt,
+    }, Math.min(...chapters.map((chapter) => chapter.index)));
+    await persistNovelChapterChanges(applyChanges(novel), chapters);
+    const latest = useTavernStore.getState();
+    const meta = latest.novelConversationMeta[novelId];
+    await publishDurablePatch({
+      novels: latest.novels.map((item) => item.id === novelId ? applyChanges(item) : item),
+      ...(meta ? { novelConversationMeta: { ...latest.novelConversationMeta, [novelId]: { ...meta, memoryStale: true } } } : {}),
+    }, applyChanges);
+  } finally { release(); }
+}
+
 let webPublicationQueue: Promise<void> = Promise.resolve();
-async function publishDurablePatch(patch: Partial<TavernState>) {
+async function publishDurablePatch(patch: Partial<TavernState>, rebaseSavedNovel?: (current: Novel) => Novel) {
   if (Platform.OS !== 'web') {
     useTavernStore.setState(patch);
     return;
@@ -8025,7 +8090,7 @@ async function publishDurablePatch(patch: Partial<TavernState>) {
       const changed = new Map(patch.novels.filter((novel) => base.novels.find((item) => item.id === novel.id) !== novel).map((novel) => [novel.id, novel]));
       rebased.novels = [
         ...[...changed.values()].filter((novel) => !latest.novels.some((item) => item.id === novel.id)),
-        ...latest.novels.map((novel) => changed.get(novel.id) ?? novel),
+        ...latest.novels.map((novel) => changed.has(novel.id) ? (rebaseSavedNovel?.(novel) ?? changed.get(novel.id)!) : novel),
       ];
     }
     return rebased;

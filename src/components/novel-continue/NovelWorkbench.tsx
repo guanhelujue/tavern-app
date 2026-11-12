@@ -822,7 +822,7 @@ function SettingsPanel({
         <View style={styles.section}>
           <ThemedText type="smallBold">回溯章节数（0 = 全部前文）</ThemedText>
           <ThemedText type="small" themeColor="textMuted">
-            续写时注入最近 N 章正文作为上下文。章节越多越一致，但成本越高。
+            参考最近 N 章已定稿正文的末尾片段；0 表示全部已定稿章节。内容会按上下文预算裁剪，参考越多通常消耗越多。
           </ThemedText>
           <DraftTextInput
             value={String(settings?.lookbackChapters ?? 3)}

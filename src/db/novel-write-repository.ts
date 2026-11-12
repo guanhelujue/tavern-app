@@ -6,6 +6,9 @@ import { deleteChapter, upsertChapter } from '@/db/repositories/chapters';
 import { deleteNovel, ensureNovelExists, upsertNovel } from '@/db/repositories/novels';
 import { serializeChapterMetadata, serializeNovelMetadata } from '@/db/novel-metadata';
 import { replaceNovelStateDocuments } from '@/db/repositories/novel-state-documents';
+import { markMemoriesStaleByChapter } from '@/db/repositories/memories';
+import { markStoryFactsStaleByChapter } from '@/db/repositories/story-facts';
+import { inDatabaseTransaction } from '@/db/transaction';
 import type { Novel, NovelChapter } from '@/types/tavern';
 
 const novelWriteQueues = new Map<string, Promise<void>>();
@@ -103,6 +106,23 @@ export async function persistNovelChapter(novelId: string, chapter: NovelChapter
     const db = await getAppDatabase();
     await ensureNovelExists(db, novelId);
     await upsertChapter(db, chapterRow(novelId, chapter));
+  }));
+}
+
+/** An explicit save publishes only after the complete chapter batch is durable. */
+export async function persistNovelChapterChanges(novel: Novel, chapters: NovelChapter[]) {
+  if (Platform.OS === 'web') return;
+  return enqueueNovelWrite(novel.id, () => withDatabaseBusyRetry(async () => {
+    const db = await getAppDatabase();
+    await inDatabaseTransaction(db, async (transaction) => {
+      await ensureNovelExists(transaction, novel.id);
+      for (const chapter of chapters) {
+        await upsertChapter(transaction, chapterRow(novel.id, chapter));
+        await markMemoriesStaleByChapter(transaction, novel.id, chapter.id, novel.updatedAt);
+        await markStoryFactsStaleByChapter(transaction, novel.id, chapter.id, novel.updatedAt);
+      }
+      await writeNovelMetadataInDatabase(transaction, novel);
+    });
   }));
 }
 
