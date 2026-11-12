@@ -22,6 +22,7 @@ export function NovelMobileShelf({ novels, onOpen, onDelete, onCreate, onImport 
   const { width } = useWindowDimensions();
   const motionEnabled = useTavernStore((state) => state.appearanceSettings.motionEnabled);
   const [deckExpanded, setDeckExpanded] = useState(!motionEnabled);
+  const deckScrollRef = useRef<ScrollView>(null);
   const deckExpandedRef = useRef(!motionEnabled);
   const [deckProgress] = useState(() => new Animated.Value(motionEnabled ? 0 : 1));
   const effectiveDeckExpanded = !motionEnabled || deckExpanded;
@@ -45,6 +46,9 @@ export function NovelMobileShelf({ novels, onOpen, onDelete, onCreate, onImport 
     }
 
     const reduceMotion = await AccessibilityInfo.isReduceMotionEnabled().catch(() => false);
+    if (!nextExpanded) {
+      deckScrollRef.current?.scrollTo({ x: 0, animated: false });
+    }
     deckExpandedRef.current = nextExpanded;
     setDeckExpanded(nextExpanded);
     if (reduceMotion) {
@@ -137,7 +141,9 @@ export function NovelMobileShelf({ novels, onOpen, onDelete, onCreate, onImport 
         </View>
 
         <ScrollView
+          ref={deckScrollRef}
           horizontal
+          removeClippedSubviews={false}
           showsHorizontalScrollIndicator={false}
           decelerationRate="fast"
           snapToInterval={cardWidth - cardOverlap}
