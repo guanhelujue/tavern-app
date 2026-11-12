@@ -1,7 +1,7 @@
 {
   "name": "tavern-app",
   "main": "expo-router/entry",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "dependencies": {
     "@expo-google-fonts/noto-sans-sc": "^0.4.3",
     "@expo-google-fonts/noto-serif-sc": "^0.4.3",
