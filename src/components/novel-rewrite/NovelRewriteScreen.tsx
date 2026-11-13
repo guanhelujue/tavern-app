@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';

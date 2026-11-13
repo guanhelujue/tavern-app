@@ -1,3 +1,4 @@
+import { parseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage } from './llm';
 import type { ApiSettings, OpenAIChatMessage } from '../types/tavern';
 import { COMIC_DIMENSIONS } from '../constants/novel-comic';
@@ -34,12 +35,7 @@ function record(value: unknown): Record<string, unknown> {
 function text(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
 function array(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function jsonFromResponse(content: string): unknown {
-  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const candidates = [cleaned];
-  const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1));
-  for (const candidate of candidates) { try { return JSON.parse(candidate); } catch { /* bounded fallback */ } }
-  throw new Error('分镜规划模型返回的内容不是合法 JSON。');
+  return parseAiJson(content);
 }
 
 /** Stable, synchronous source fingerprint used to detect stale comic plans. */
@@ -173,7 +169,7 @@ export async function planNovelComic(input: ComicPlannerRequest): Promise<NovelC
   if (content.length > 30_000) throw new Error('正文超过 30000 字，请按章节或片段生成分镜。');
   const pageCount = Math.max(1, Math.min(6, Math.round(Number.isFinite(input.pageCount) ? input.pageCount! : 2)));
   const completion = input.requestCompletion ?? requestCompletionWithUsage;
-  const result = await completion({ apiSettings: { ...input.apiSettings, streamingEnabled: false, thinkingDisabled: true }, purpose: 'comic-plan', maxTokens: Math.min(15000, 600 + pageCount * 2400), temperature: 0.35, signal: input.signal, messages: [{ role: 'system', content: '只输出符合要求的 JSON，不要 Markdown 或解释。' }, { role: 'user', content: buildComicPlannerPrompt({ content, characters: input.characters, pageCount, storyMode: input.storyMode ?? 'auto' }) }] as OpenAIChatMessage[] });
+  const result = await completion({ responseFormat: 'json', apiSettings: { ...input.apiSettings, streamingEnabled: false, thinkingDisabled: true }, purpose: 'comic-plan', maxTokens: Math.min(15000, 600 + pageCount * 2400), temperature: 0.35, signal: input.signal, messages: [{ role: 'system', content: '只输出符合要求的 JSON，不要 Markdown 或解释。' }, { role: 'user', content: buildComicPlannerPrompt({ content, characters: input.characters, pageCount, storyMode: input.storyMode ?? 'auto' }) }] as OpenAIChatMessage[] });
   const sourceHash = comicSourceHash(content);
   const rawPlan = jsonFromResponse(result.content);
   const characters = mergeCharacters(record(rawPlan).characters, input.characters, content);

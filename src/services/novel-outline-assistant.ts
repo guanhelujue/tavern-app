@@ -1,15 +1,10 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage, type ChatCompletionResult } from '@/services/llm';
 import { cloneNovelOutline } from '@/utils/novel-outline-proposals';
 import { buildNovelCharacterContext } from '@/utils/novel-narrative-context';
 import type { ApiSettings, Novel, NovelOutline, NovelVolumePlan, OpenAIChatMessage } from '@/types/tavern';
 
-type OutlineAssistantCompletion = (input: {
-  apiSettings: ApiSettings;
-  messages: OpenAIChatMessage[];
-  purpose?: string;
-  maxTokens?: number;
-  temperature?: number;
-}) => Promise<ChatCompletionResult>;
+type OutlineAssistantCompletion = (input: Parameters<typeof requestCompletionWithUsage>[0]) => Promise<ChatCompletionResult>;
 
 export type OutlineTextRevisionResult = {
   outline: NovelOutline;
@@ -27,20 +22,7 @@ export type OutlineTextRevisionRequest = {
 };
 
 function extractJsonObject(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  const candidates = [trimmed, fenced].filter((candidate): candidate is string => Boolean(candidate));
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Continue with the next common model response shape.
-    }
-  }
-  return null;
+  return tryParseAiJson(text) ?? null;
 }
 
 function text(value: unknown): string {
@@ -104,7 +86,7 @@ export async function requestOutlineTextRevision({
       ].join('\n\n'),
     },
   ];
-  const result = await requestCompletion({
+  const result = await requestCompletion({ responseFormat: 'json',
     apiSettings: { ...apiSettings, streamingEnabled: false, thinkingDisabled: true },
     messages,
     purpose: 'outline-text-revision-candidate',

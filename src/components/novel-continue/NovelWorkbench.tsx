@@ -1,3 +1,4 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { MobileAction, MobileEmptyState, MobileSectionTitle, mobileStyles } from '@/components/mobile/MobileUI';
 import { NovelMobileNavigation } from '@/components/novel-continue/NovelMobileNavigation';
@@ -6,10 +7,10 @@ import type { NavigationProp } from 'expo-router/react-navigation';
 import { useMemo, useState } from 'react';
 import {
   Modal,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -886,7 +887,8 @@ function InstructionModal({
       animationType="fade"
       onRequestClose={onCancel}
       statusBarTranslucent>
-      <View style={[styles.modalOverlay, { backgroundColor: theme.scrim }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1, backgroundColor: theme.scrim }} contentContainerStyle={styles.modalOverlay}>
         <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <ThemedText type="smallBold">本章写作要求（可选）</ThemedText>
           <ThemedText type="small" themeColor="textMuted">
@@ -918,7 +920,8 @@ function InstructionModal({
             </Pressable>
           </View>
         </View>
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1050,7 +1053,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   modalOverlay: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.three,

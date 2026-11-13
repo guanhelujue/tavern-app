@@ -1,5 +1,6 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View, type TextProps } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View, type TextProps } from 'react-native';
 import { Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 

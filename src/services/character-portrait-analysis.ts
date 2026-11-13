@@ -1,3 +1,4 @@
+import { parseAiJson } from '@/utils/ai-json';
 import { normalizeCharacterAiSummary } from '../features/character-dossier-v2/ai-summary';
 import { CHARACTER_PRIVATE_DOSSIER_SCHEMA } from '../features/character-dossier-v2/generation-prompt';
 import { buildNsfwCharacterCreatePrompt } from '../constants/content-scale';
@@ -19,6 +20,7 @@ import type { CharacterAiSummary } from '../types/character-dossier-v2';
 import type { ApiSettings, NovelCastCharacter } from '../types/tavern';
 import { asRecord, asString } from '../utils/helpers';
 import { readNovelImageAsInlineData } from '../utils/novel-images';
+import { recoverStructuredResponse } from './structured-response';
 
 type PortraitAnalysisPayload = {
   cast?: Record<string, unknown>;
@@ -121,7 +123,7 @@ function extractJsonObject(raw: string): PortraitAnalysisPayload | null {
   if (start >= 0 && end > start) candidates.push(source.slice(start, end + 1));
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate) as unknown;
+      const parsed = parseAiJson(candidate) as unknown;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return parsed as PortraitAnalysisPayload;
       }
@@ -396,11 +398,48 @@ export async function analyzeCharacterPortrait({
       const message = asString(asRecord(asRecord(responsePayload)?.error)?.message) || raw;
       throw new Error(message || `识图请求失败（HTTP ${response.status}）。`);
     }
-    const parsed = extractJsonObject(responseText(responsePayload, protocol));
+    const modelText = responseText(responsePayload, protocol);
+    const repairedResponse = await recoverStructuredResponse({ content: modelText, ...usageFromPayload(responsePayload, protocol) }, {
+      signal: controller.signal,
+      validate: (value) => {
+        const record = asRecord(value);
+        const dossier = asRecord(record.dossierV2);
+        return Boolean(asRecord(record.cast).name && dossier.version === 2 && dossier.public && typeof dossier.public === 'object');
+      },
+      repair: async (repairPrompt, signal) => {
+        const repairMessages = [
+          { role: 'user', content: contextText },
+          { role: 'assistant', content: modelText },
+          { role: 'user', content: repairPrompt },
+        ];
+        let repairBody: Record<string, unknown>;
+        if (protocol === 'google-generate-content') {
+          repairBody = {
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: repairMessages.map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
+            generationConfig: { temperature: 0.2, maxOutputTokens: 3600, responseMimeType: 'application/json' },
+            safetySettings: geminiPermissiveSafetySettings(),
+          };
+        } else if (protocol === 'anthropic-messages') {
+          repairBody = { model, system: systemPrompt, max_tokens: 3600, temperature: 0.2, messages: repairMessages.filter((message) => message.role !== 'system').map((message) => ({ role: message.role, content: message.content })) };
+        } else if (protocol === 'openai-responses') {
+          repairBody = { model, instructions: systemPrompt, input: repairMessages.map((message) => ({ role: message.role, content: [{ type: 'input_text', text: message.content }] })), max_output_tokens: 3600 };
+        } else {
+          repairBody = { model, temperature: 0.2, max_tokens: 3600, stream: false, messages: repairMessages };
+        }
+        const repairResponse = await fetch(endpoint, { method: 'POST', headers: headersFor({ ...apiSettings, protocol }), body: JSON.stringify(repairBody), signal });
+        const repairRaw = await repairResponse.text();
+        let repairPayload: unknown;
+        try { repairPayload = repairRaw ? JSON.parse(repairRaw) : null; } catch { repairPayload = null; }
+        if (!repairResponse.ok) throw new Error(`视觉 JSON 修复失败（HTTP ${repairResponse.status}）。`);
+        return { content: responseText(repairPayload, protocol), ...usageFromPayload(repairPayload, protocol) };
+      },
+    });
+    const parsed = extractJsonObject(repairedResponse.content);
     if (!parsed?.cast || !parsed.dossierV2) {
       throw new Error('视觉模型未返回可用的角色档案。');
     }
-    const usage = usageFromPayload(responsePayload, protocol);
+    const usage = { promptTokens: repairedResponse.promptTokens, completionTokens: repairedResponse.completionTokens };
     const character = mergeVisibleCharacter(current, parsed, target);
     return {
       character,

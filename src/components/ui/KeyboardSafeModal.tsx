@@ -1,9 +1,9 @@
+import { KeyboardAwareScrollView as ScrollView } from '@/components/ui/KeyboardAwareScrollView';
 import type { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';

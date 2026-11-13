@@ -10,6 +10,7 @@ import {
 import { DEFAULT_NOVEL_SYSTEM_PROMPT } from '@/constants/novel-memory';
 import { REWRITE_PASS_SCORE } from '@/constants/novel-story-state';
 import { requestCompletionWithUsage, requestPlainCompletion } from '@/services/llm';
+import { extractAiJsonArray, extractAiJsonObject } from '@/utils/ai-json';
 import { shouldAdoptRevision } from '@/services/novel-rewrite-pipeline';
 import { normalizeCharacterAiSummary } from '@/features/character-dossier-v2/ai-summary';
 import {
@@ -47,7 +48,7 @@ import { asString, generateId, normalizeAliases } from '@/utils/helpers';
 const MAX_CAST_CONTEXT_CHARS = 1600;
 
 const NOVEL_CREATE_JSON_RETRY_HINT =
-  '（上次输出未通过 JSON 校验。请重新输出：只输出合法的纯 JSON 对象，不要包含任何解释、注释、代码块标记或多余文字。）';
+  '（上次输出未通过 JSON 校验。请重新输出：只输出符合原要求的合法 JSON 对象或数组，不要包含任何解释、注释、代码块标记或多余文字。）';
 
 /** 新建侧 AI 调用 token 用量（供 UI 统计到小说 continuationStats）。 */
 export type CreateAiUsage = {
@@ -239,44 +240,9 @@ function hasRomanticContext(note: string): boolean {
   return /恋爱|喜欢|爱慕|钟情|表白|追求|暧昧|心动|约会|求婚|订婚|已婚|结婚|夫妻|伴侣|情人/.test(note);
 }
 
-function looksLikeTruncatedJson(text: string) {
-  const open = (text.match(/\{/g) ?? []).length;
-  const close = (text.match(/\}/g) ?? []).length;
-  return open > close || (text.includes('{') && !text.trimEnd().endsWith('}'));
-}
-
 function extractJsonObject(text: string): unknown {
-  const trimmed = text.trim();
-  const candidates: string[] = [trimmed];
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-
-  if (fenced) {
-    candidates.push(fenced);
-  }
-
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-
-  if (start >= 0 && end > start) {
-    candidates.push(trimmed.slice(start, end + 1));
-  }
-
-  let lastError: unknown;
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const lastMessage = lastError instanceof Error ? lastError.message : String(lastError);
-
-  if (looksLikeTruncatedJson(trimmed) || /unexpected end of/i.test(lastMessage)) {
-    throw new Error('模型返回的 JSON 不完整（输出被截断）。请重试一次。');
-  }
-
+  const parsed = extractAiJsonObject(text);
+  if (parsed) return parsed;
   throw new Error('模型未返回可解析的 JSON。');
 }
 
@@ -319,25 +285,27 @@ async function requestCreateCompletion({
     temperature,
   };
 
-  const run = (content: string) =>
+  const run = (content: string, previous?: string) =>
     requestCompletionWithUsage({
       apiSettings: settings,
       maxTokens,
       temperature,
       purpose,
+      responseFormat: 'json',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content },
+        ...(previous ? [{ role: 'assistant' as const, content: previous }, { role: 'user' as const, content: '保留已有完整字段，只修复格式并补足原要求中的缺失项。' }] : []),
       ],
     });
 
   const first = await run(userContent);
   try {
-    validate(first.content);
+    if (!validate(first.content)) throw new Error('AI 返回内容未通过结构校验。');
     return { raw: first.content, usage: toCreateAiUsage(first) };
   } catch {
-    const retry = await run(`${userContent}\n\n${NOVEL_CREATE_JSON_RETRY_HINT}`);
-    validate(retry.content);
+    const retry = await run(`${userContent}\n\n${NOVEL_CREATE_JSON_RETRY_HINT}`, first.content);
+    if (!validate(retry.content)) throw new Error('AI 修复结果未通过结构校验。');
     return {
       raw: retry.content,
       usage: {
@@ -394,6 +362,9 @@ async function auditCreateDraft({
     maxTokens,
     temperature,
     purpose,
+    responseFormat: 'json',
+    allowPartialJson: false,
+    validateJson: (value) => isPlainObject(value) && typeof value.score === 'number' && Number.isFinite(value.score) && Array.isArray(value.issues),
     messages: [
       { role: 'system', content: CREATE_AUDIT_SYSTEM_PROMPT },
       { role: 'user', content: auditUserContent },
@@ -449,6 +420,8 @@ async function reviseCreateDraft({
     maxTokens,
     temperature,
     purpose,
+    responseFormat: 'json',
+    validateJson: (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value)),
     messages: [
       { role: 'system', content: CREATE_REVISE_SYSTEM_PROMPT },
       {
@@ -1158,6 +1131,12 @@ export async function generateNovelFramework({
     purpose: NOVEL_CREATE_USAGE_TASKS.framework,
     systemPrompt: buildFrameworkSystemPrompt(),
     userContent,
+    validate: (text) => {
+      const payload = extractJsonObject(text);
+      if (!isPlainObject(payload)) return false;
+      return [payload.worldName, payload.worldEra, payload.gameRules]
+        .some((value) => typeof value === 'string' && value.trim().length > 0);
+    },
   });
 
   const parsed = extractJsonObject(raw) as FrameworkAiPayload;
@@ -1404,6 +1383,12 @@ export async function generateNovelCastCharacter({
       purpose: NOVEL_CREATE_USAGE_TASKS.cast,
       systemPrompt: buildCharacterSystemPrompt(allowNsfw),
       userContent,
+      validate: (text) => {
+        const parsed = extractJsonObject(text) as CharacterGenerationAiPayload | null;
+        if (!parsed || !isPlainObject(parsed.cast)) return false;
+        const name = fillIfEmpty(effectiveCurrent.name, asString(parsed.cast.name));
+        return Boolean(name.trim());
+      },
     });
 
     const parsed = extractJsonObject(raw) as CharacterGenerationAiPayload;
@@ -1659,28 +1644,24 @@ function parseLoreBatchChunk({
   reservedNames: Set<string>;
 }): NovelLoreEntry[] {
   const rows = readLoreBatchEntries(raw);
-  if (rows.length !== expectedCount) {
-    throw new Error(`AI 应返回 ${expectedCount} 条，实际返回 ${rows.length} 条。`);
-  }
-
   const chunkNames = new Set<string>();
-  return rows.map((row, index) => {
+  const entries: NovelLoreEntry[] = [];
+  rows.forEach((row) => {
     if (!row || typeof row !== 'object' || row.type !== expectedType) {
-      throw new Error(`第 ${index + 1} 条设定类型不正确。`);
+      return;
     }
 
     const name = asString(row.name);
     const content = asString(row.content).slice(0, MAX_NOVEL_LORE_CONTENT_LENGTH);
     const normalizedName = name.toLowerCase();
     if (!name || !content) {
-      throw new Error(`第 ${index + 1} 条设定缺少名称或正文。`);
+      return;
     }
     if (reservedNames.has(normalizedName) || chunkNames.has(normalizedName)) {
-      throw new Error(`生成结果包含重名设定「${name}」。`);
+      return;
     }
     chunkNames.add(normalizedName);
-
-    return normalizeLoreEntry({
+    entries.push(normalizeLoreEntry({
       id: generateId('lore'),
       type: expectedType,
       name,
@@ -1688,8 +1669,12 @@ function parseLoreBatchChunk({
       content,
       enabled: true,
       updatedAt: new Date().toISOString(),
-    });
+    }));
   });
+  if (entries.length === 0) {
+    throw new Error(`AI 返回的 ${expectedType} 设定没有可用条目（期望 ${expectedCount} 条）。`);
+  }
+  return entries.slice(0, expectedCount);
 }
 
 function buildLoreBatchSystemPrompt(type: NovelLoreTypeId, count: number) {
@@ -1721,8 +1706,8 @@ JSON 格式：
 
 /**
  * Generate world-building and location candidates without persisting them.
- * Results are split into small exact-count requests so malformed or truncated
- * model output can be retried before the user reaches the review step.
+ * Results are split into small requests. Complete candidates survive damaged
+ * rows and failed batches so the author can still review the usable results.
  */
 export async function generateNovelLoreDraftBatch({
   apiSettings,
@@ -1771,6 +1756,7 @@ export async function generateNovelLoreDraftBatch({
     }
   }
 
+  let batchFailure: unknown;
   for (const job of jobs) {
     const userContent = [
       `【小说名称】${novelName.trim() || '未命名'}`,
@@ -1787,23 +1773,31 @@ export async function generateNovelLoreDraftBatch({
     ].filter(Boolean).join('\n\n');
 
     let decoded: NovelLoreEntry[] = [];
-    const { raw, usage } = await requestCreateCompletion({
-      apiSettings,
-      maxTokens: resolveNovelCreateMaxTokens(novelCreateMaxTokens, 4000),
-      temperature: Math.min(Math.max(apiSettings.temperature, 0.7), 0.9),
-      purpose: NOVEL_CREATE_USAGE_TASKS.lore,
-      systemPrompt: buildLoreBatchSystemPrompt(job.type, job.count),
-      userContent,
-      validate: (candidate) => {
-        decoded = parseLoreBatchChunk({
-          raw: candidate,
-          expectedType: job.type,
-          expectedCount: job.count,
-          reservedNames,
-        });
-        return true;
-      },
-    });
+    let response: Awaited<ReturnType<typeof requestCreateCompletion>>;
+    try {
+      response = await requestCreateCompletion({
+        apiSettings,
+        maxTokens: resolveNovelCreateMaxTokens(novelCreateMaxTokens, 4000),
+        temperature: Math.min(Math.max(apiSettings.temperature, 0.7), 0.9),
+        purpose: NOVEL_CREATE_USAGE_TASKS.lore,
+        systemPrompt: buildLoreBatchSystemPrompt(job.type, job.count),
+        userContent,
+        validate: (candidate) => {
+          decoded = parseLoreBatchChunk({
+            raw: candidate,
+            expectedType: job.type,
+            expectedCount: job.count,
+            reservedNames,
+          });
+          return true;
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      batchFailure = error;
+      continue;
+    }
+    const { raw, usage } = response;
 
     if (decoded.length === 0) {
       decoded = parseLoreBatchChunk({
@@ -1820,6 +1814,7 @@ export async function generateNovelLoreDraftBatch({
     onUsage?.(usage);
   }
 
+  if (!entries.length && batchFailure) throw batchFailure;
   return { requested, entries };
 }
 
@@ -1979,6 +1974,11 @@ export async function generateNovelLoreEntry({
     purpose: NOVEL_CREATE_USAGE_TASKS.lore,
     systemPrompt: buildLoreSystemPrompt(),
     userContent,
+    validate: (text) => {
+      const payload = extractJsonObject(text) as LoreAiPayload;
+      const merged = mergeLoreDraft(current, payload, lockedType);
+      return Boolean(merged.name.trim() && merged.content.trim() && !reservedNames.has(merged.name.trim().toLowerCase()));
+    },
   });
 
   const parsed = extractJsonObject(raw) as LoreAiPayload;
@@ -2382,7 +2382,7 @@ export async function generateSupportingCharacters({
     userContent,
     validate: (text) => {
       const parsed = extractJsonArray(text);
-      return Array.isArray(parsed) && parsed.length > 0;
+      return Array.isArray(parsed) && parsed.some((item) => isPlainObject(item) && isPlainObject(item.cast) && typeof item.cast.name === 'string' && item.cast.name.trim().length > 0);
     },
   });
 
@@ -2471,24 +2471,7 @@ export async function generateSupportingCharacters({
   return generated;
 }
 
-function extractJsonArray(raw: string): unknown {
-  const trimmed = raw.trim();
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch {
-    // Not directly parseable
-  }
-  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
-  if (arrayMatch) {
-    try {
-      return JSON.parse(arrayMatch[0]);
-    } catch {
-      // Fall through
-    }
-  }
-  return [];
+function extractJsonArray(raw: string): unknown[] | null {
+  return extractAiJsonArray(raw);
 }
 

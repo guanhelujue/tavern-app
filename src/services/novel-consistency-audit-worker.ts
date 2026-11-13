@@ -9,7 +9,9 @@ import {
   type AuditOutboxRow,
 } from '@/db/repositories/audit-outbox';
 import { listActiveStoryFacts } from '@/db/repositories/story-facts';
-import type { LlmCompletion } from '@/services/novel-story-state';
+import type { LlmCompletion, LlmMessage } from '@/services/novel-story-state';
+import { inspectAiJson, parseAiJson } from '@/utils/ai-json';
+import { recoverStructuredResponse } from '@/services/structured-response';
 
 type AuditIssue = {
   category: 'character' | 'world' | 'hook' | 'timeline' | 'plot' | 'entity';
@@ -20,10 +22,9 @@ type AuditIssue = {
 };
 
 function parseIssues(content: string): { summary: string; issues: AuditIssue[] } {
-  const start = content.indexOf('{');
-  const end = content.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('审计模型未返回 JSON。');
-  const value = JSON.parse(content.slice(start, end + 1)) as { summary?: unknown; issues?: unknown[] };
+  if (inspectAiJson(content).status === 'partial') throw new Error('审计结果尚不完整。');
+  const value = parseAiJson(content) as { summary?: unknown; issues?: unknown[] };
+  if (!value || !Array.isArray(value.issues)) throw new Error('审计结果缺少问题列表。');
   const allowedCategory = new Set(['character', 'world', 'hook', 'timeline', 'plot', 'entity']);
   const allowedSeverity = new Set(['critical', 'warning', 'info']);
   const issues = (value.issues ?? []).flatMap((item) => {
@@ -39,6 +40,7 @@ function parseIssues(content: string): { summary: string; issues: AuditIssue[] }
       suggestion: typeof row.suggestion === 'string' ? row.suggestion : '',
     }];
   });
+  if (issues.length !== value.issues.length) throw new Error('部分审计问题不完整，需要修复后继续。');
   return { summary: typeof value.summary === 'string' ? value.summary : '', issues };
 }
 
@@ -70,7 +72,7 @@ async function auditJob(db: SQLiteDatabase, job: AuditOutboxRow, completion: Llm
     job.novelId, fromChapter, toChapter, Math.max(window, toChapter - fromChapter + 1),
   );
   const facts = await listActiveStoryFacts(db, job.novelId, { limit: 120 });
-  const result = await completion([
+  const messages: LlmMessage[] = [
     {
       role: 'system',
       content: '你是小说长期一致性审计器。仅报告有正文证据的问题。输出 JSON：' +
@@ -83,7 +85,13 @@ async function auditJob(db: SQLiteDatabase, job: AuditOutboxRow, completion: Llm
         `【章节窗口】\n${chapters.reverse().map((chapter) => `第${chapter.chapterIndex}章 ${chapter.title}\n${chapter.content.slice(0, 5000)}`).join('\n\n')}\n` +
         `【当前事实】\n${facts.map((fact) => `${fact.factType}/${fact.subjectId}: ${fact.contentJson}`).join('\n').slice(0, 12000)}`,
     },
-  ], 'consistency-audit');
+  ];
+  const first = await completion(messages, 'consistency-audit');
+  const result = await recoverStructuredResponse(first, {
+    allowPartial: false,
+    validate: (value) => { parseIssues(JSON.stringify(value)); return true; },
+    repair: (prompt) => completion([...messages, { role: 'assistant', content: first.content }, { role: 'user', content: prompt }], 'consistency-audit-repair'),
+  });
   const audit = parseIssues(result.content);
   await exclusive(db, async (transaction) => {
     const runId = `${job.id}:run:${job.attempts + 1}`;

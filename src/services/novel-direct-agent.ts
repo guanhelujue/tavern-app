@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage, type ContextHistoryMessage } from '@/services/llm';
 import {
   formatCharacterAiSummaryForPrompt,
@@ -40,22 +41,7 @@ function list(value: unknown, limit = 12): string[] {
 }
 
 function extractJsonObject(value: string): unknown {
-  const source = value.trim();
-  const candidates = [source];
-  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
-  const start = source.indexOf('{');
-  const end = source.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(source.slice(start, end + 1));
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
+  return tryParseAiJson(value) ?? null;
 }
 
 export function normalizeNovelDirectPlan(value: unknown): NovelDirectPlan | null {
@@ -179,7 +165,7 @@ export async function generateNovelDirectPlan({
   memory,
   signal,
 }: GenerateNovelDirectPlanInput): Promise<{ plan: NovelDirectPlan; tokens: number; model?: string }> {
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json', validateJson: (value) => Boolean(normalizeNovelDirectPlan(value)),
     apiSettings: {
       ...apiSettings,
       streamingEnabled: false,

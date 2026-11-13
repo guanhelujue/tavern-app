@@ -1,4 +1,5 @@
-import { Platform, ScrollView, StyleSheet } from 'react-native';
+import { KeyboardAwareScrollView as ScrollView } from '@/components/ui/KeyboardAwareScrollView';
+import { Platform, StyleSheet } from 'react-native';
 import { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 

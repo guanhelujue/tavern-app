@@ -20,7 +20,13 @@ describe('proposeNovelVolumeRoutes', () => {
   it('rejects empty and malformed responses', async () => {
     await expect(proposeNovelVolumeRoutes({ novel, volume: novel.outline!.volumes[0], apiSettings: settings, requestCompletion: async () => ({ content: '' }) })).rejects.toThrow('没有返回');
     await expect(proposeNovelVolumeRoutes({ novel, volume: novel.outline!.volumes[0], apiSettings: settings, requestCompletion: async () => ({ content: 'bad' }) })).rejects.toThrow('有效 JSON');
-    await expect(proposeNovelVolumeRoutes({ novel, volume: novel.outline!.volumes[0], apiSettings: settings, requestCompletion: async () => ({ content: '{"routes":[{"title":"a","summary":"b","turningPoint":"c","risk":"d","endingState":"e"}]}' }) })).rejects.toThrow('2到3');
+  });
+
+  it('keeps a complete route when a later sibling is incomplete', async () => {
+    const result = await proposeNovelVolumeRoutes({ novel, volume: novel.outline!.volumes[0], apiSettings: settings,
+      requestCompletion: async () => ({ content: '{"routes":[{"title":"a","summary":"b","turningPoint":"c","risk":"d","endingState":"e"},{"title":"unfinished"}]}' }) });
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].endingState).toBe('e');
   });
 
   it.each([

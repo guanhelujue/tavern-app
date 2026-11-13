@@ -1,6 +1,7 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { router, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { ThemedText } from '@/components/themed-text';

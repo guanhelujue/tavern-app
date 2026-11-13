@@ -1,6 +1,7 @@
 import { requestCompletionWithUsage } from '@/services/llm';
 import type { ApiSettings, OpenAIChatMessage } from '@/types/tavern';
 import { parseStoryImportCandidate, type StoryImportCandidate } from './model';
+import { parseAiJson } from '@/utils/ai-json';
 
 export type StoryImportCompletion = (input: {
   apiSettings: ApiSettings;
@@ -21,15 +22,7 @@ export type StoryImportProgress = {
 };
 
 function extractJson(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  const candidates = [fenced, trimmed].filter(Boolean) as string[];
-  const start = trimmed.indexOf('{'); const end = trimmed.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
-  for (const candidate of candidates) {
-    try { return JSON.parse(candidate); } catch { /* try another common response wrapper */ }
-  }
-  return null;
+  try { return parseAiJson(text); } catch { return null; }
 }
 
 function promptFor(source: string): OpenAIChatMessage[] {

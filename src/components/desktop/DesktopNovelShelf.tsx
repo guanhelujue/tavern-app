@@ -1,10 +1,9 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { Image } from 'expo-image';
 import { useMemo, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 

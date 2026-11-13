@@ -1,7 +1,8 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';

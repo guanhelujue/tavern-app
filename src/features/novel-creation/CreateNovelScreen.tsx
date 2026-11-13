@@ -1,14 +1,8 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAwareScrollView as ScrollView } from '@/components/ui/KeyboardAwareScrollView';
 
 import { NovelFormField } from '@/components/novel-create/NovelFormField';
 import { MobilePageHeader, mobileStyles } from '@/components/mobile/MobileUI';
@@ -175,7 +169,7 @@ export default function NewNovelCreationScreen() {
   return (
     <ThemedView decorated={Platform.OS === 'web'} style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
           {Platform.OS !== 'web' ? <MobilePageHeader title={activeBlueprint ? '创建作品' : '故事构思'} onBack={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)/novels'); }} action={<ThemedText type="small" themeColor="textMuted">自动保存</ThemedText>} /> : null}
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, Platform.OS !== 'web' && mobileStyles.content]}>
             {Platform.OS === 'web' ? <View style={styles.topBar}>

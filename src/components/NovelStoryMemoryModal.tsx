@@ -1,13 +1,12 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';

@@ -1,3 +1,4 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -6,11 +7,9 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -1001,7 +1000,7 @@ export function NovelCastCharacterModal({
       {Platform.OS !== 'web' ? (
         <KeyboardAvoidingView
           style={[styles.mobileBackdrop, { backgroundColor: chrome.background, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 24) }]}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
           <View style={[styles.mobileHeader, { borderBottomColor: chrome.border }]}>
             <View style={styles.mobileHeaderCopy}>
@@ -1017,9 +1016,9 @@ export function NovelCastCharacterModal({
             <TaskModelSelector task="character" disabled={aiBusy || Boolean(biographyGeneratingId) || biographyStorageBusy} />
             {sheetPage !== 2 ? <Pressable accessibilityRole="button" onPress={() => setAiPanelOpen((open) => !open)} style={[styles.mobileAiToggle, { borderColor: chrome.border }]}><Text style={[styles.mobileAiToggleText, { color: chrome.accent }]}>{aiPanelOpen ? '收起 AI' : 'AI 补全'}</Text></Pressable> : null}
           </View>
-          <GHScrollView ref={bodyScrollRef} style={styles.mobileStage} contentContainerStyle={styles.mobileBody} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+          <ScrollView scrollComponent={GHScrollView} ref={bodyScrollRef} style={styles.mobileStage} contentContainerStyle={styles.mobileBody} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
             {editorBlock}
-          </GHScrollView>
+          </ScrollView>
           <View style={[styles.mobileSaveBar, { borderTopColor: chrome.border, backgroundColor: chrome.background }]}>
             <Pressable disabled={biographyStorageBusy} onPress={() => { void handleConfirm(); }} style={[styles.mobileSaveButton, { backgroundColor: chrome.accent }, biographyStorageBusy && { opacity: 0.5 }]}><Text style={[styles.mobileSaveText, { color: chrome.accentContrast }]}>{biographyStorageBusy ? '同步小传中…' : '保存角色'}</Text></Pressable>
           </View>
@@ -1175,7 +1174,7 @@ export function NovelCastCharacterModal({
               pointerEvents="none"
               style={[styles.stageAxis, { backgroundColor: chrome.headerBorder }]}
             />
-            <GHScrollView
+            <ScrollView scrollComponent={GHScrollView}
               ref={bodyScrollRef}
               style={styles.stage}
               showsVerticalScrollIndicator={false}
@@ -1196,7 +1195,7 @@ export function NovelCastCharacterModal({
                 }}>
                 {editorBlock}
               </Animated.View>
-            </GHScrollView>
+            </ScrollView>
           </View>
 
           <View

@@ -1,4 +1,5 @@
 import { DEFAULT_MOD_EXTRACTION_PROMPT } from '../constants/writing-mod';
+import { parseAiJson } from '../utils/ai-json';
 import type { ApiSettings, WritingMod } from '../types/tavern';
 import { assertReadableText } from '../utils/text-decoding';
 import { requestPlainCompletion } from './llm';
@@ -7,7 +8,7 @@ export function parseExtractedWritingMod(raw: string): Pick<WritingMod, 'name' |
   const text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   let result: unknown;
   try {
-    result = JSON.parse(text);
+    result = parseAiJson(text);
   } catch {
     throw new Error('提取结果格式不正确，请重试。模型需要返回包含 name、content 的 JSON。');
   }
@@ -27,7 +28,10 @@ export async function extractWritingMod({ apiSettings, sampleText, extractionPro
 }): Promise<Pick<WritingMod, 'name' | 'content'>> {
   if (!sampleText.trim()) throw new Error('请先粘贴文章或导入 txt 全文。');
   assertReadableText(sampleText);
-  const raw = await requestPlainCompletion({
+  const raw = await requestPlainCompletion({ responseFormat: 'json',
+    validateJson: (value) => {
+      try { parseExtractedWritingMod(JSON.stringify(value)); return true; } catch { return false; }
+    },
     apiSettings: {
       ...apiSettings,
       streamingEnabled: false,

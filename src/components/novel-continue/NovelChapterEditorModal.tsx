@@ -2,7 +2,6 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -11,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NovelFormField } from '@/components/novel-create/NovelFormField';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
+import { KeyboardAwareScrollView } from '@/components/ui/KeyboardAwareScrollView';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -409,7 +409,7 @@ export function NovelChapterEditorModal({
     <KeyboardSafeModal
       visible={visible}
       onRequestClose={() => void requestClose()}
-      scrollable={!desktop}>
+      scrollable={false}>
       <View style={[styles.overlay, { backgroundColor: theme.scrim }]}> 
         <SafeAreaContainer insets={insets}>
           <View style={[styles.sheet, desktop && styles.desktopSheet, { backgroundColor: theme.background, borderColor: theme.border }]}>
@@ -428,7 +428,7 @@ export function NovelChapterEditorModal({
               </Pressable>
             </View>
 
-            <ScrollView
+            <KeyboardAwareScrollView
               style={styles.body}
               contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 24 }]}
               keyboardShouldPersistTaps="handled">
@@ -607,7 +607,7 @@ export function NovelChapterEditorModal({
                     ))}
                 </View>
               ) : null}
-            </ScrollView>
+            </KeyboardAwareScrollView>
           </View>
         </SafeAreaContainer>
       </View>

@@ -1,4 +1,5 @@
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 import { useMemo, useState } from 'react';
 import { Image } from 'expo-image';
 import type { ImageSource } from 'expo-image';
@@ -118,6 +119,7 @@ export function OptionsModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable
           style={[styles.modalCard, { backgroundColor: theme.surfaceElevated, borderColor: theme.border }]}
@@ -184,6 +186,7 @@ export function OptionsModal({
           </Pressable>
         </Pressable>
       </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

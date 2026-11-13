@@ -1,8 +1,8 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useState } from 'react';
 import {
   StyleSheet,
   Text,
-  TextInput,
   View,
   type TextInputProps,
 } from 'react-native';

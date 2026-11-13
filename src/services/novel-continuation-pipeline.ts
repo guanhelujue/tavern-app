@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import {
   DEFAULT_CHAPTER_RULES,
   FORESHADOWING_OVERDUE_AFTER_CHAPTERS,
@@ -39,30 +40,7 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function extractJsonObject(text: string): unknown {
-  const trimmed = text.trim();
-  const candidates: string[] = [trimmed];
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-
-  if (fenced) {
-    candidates.push(fenced);
-  }
-
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-
-  if (start >= 0 && end > start) {
-    candidates.push(trimmed.slice(start, end + 1));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-
-  return null;
+  return tryParseAiJson(text) ?? null;
 }
 
 function asString(value: unknown): string {
@@ -249,18 +227,23 @@ ${chapter.content.slice(0, 4000)}
 
 请按系统要求输出 JSON。`;
 
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json',
     apiSettings,
     messages: [
       { role: 'system', content: FACT_CHECK_SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ],
     purpose: 'fact-check',
+    allowPartialJson: false,
+    validateJson: (value) => Boolean(value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).issues)),
     maxTokens: 1024,
     temperature: 0.2,
   });
 
   const raw = extractJsonObject(result.content);
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as Record<string, unknown>).issues)) {
+    throw new Error('审查结果尚不完整，已保留章节，请重试审查。');
+  }
   const payload = (raw ?? {}) as Record<string, unknown>;
   const issues = Array.isArray(payload.issues)
     ? payload.issues
@@ -547,7 +530,7 @@ ${sample || '（无前文）'}
 
 【当前进度】前文已到第 ${nextChapterIndex - 1} 章，请从第 ${nextChapterIndex} 章开始规划。${routeText}${worldContext ? `\n\n【当前小世界设定】\n${worldContext}` : ''}${worldPlanRequirement}${authorBriefBlock}`;
 
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json',
     apiSettings,
     messages: [
       { role: 'system', content: buildOutlineSystemPrompt(targetChapterCount, normalizedChapterCountRange) },
@@ -778,7 +761,7 @@ export async function generateNovelOutlineChapterRevision({
         .map((chapter) => `${chapter.index === chapterIndex ? '→' : '-'} 第${chapter.index}章《${chapter.title}》：${chapter.goal}${chapter.characterChange ? `；人物变化：${chapter.characterChange}` : ''}${chapter.foreshadowing ? `；伏笔：${chapter.foreshadowing}` : ''}${chapter.endingHook ? `；章末衔接：${chapter.endingHook}` : ''}${chapter.sceneEnd ? '［场景收束］' : ''}`)
     .join('\n');
 
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json',
     apiSettings,
     messages: [
       {

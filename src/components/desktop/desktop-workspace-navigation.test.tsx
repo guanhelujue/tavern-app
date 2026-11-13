@@ -14,6 +14,7 @@ const routerState = vi.hoisted(() => ({ pathname: '/novel/chapters/novel-1', par
 const interactionState = vi.hoisted(() => ({ handlers: new Map<string, () => void>(), links: new Set<string>() }));
 
 vi.mock('react-native', () => ({
+  Keyboard: { metrics: () => undefined, addListener: () => ({ remove: () => {} }) },
   Platform: { get OS() { return rnState.platform; }, select: (values: Record<string, unknown>) => values[rnState.platform] ?? values.default },
   useWindowDimensions: () => ({ width: rnState.width, height: 800, scale: 1, fontScale: 1 }),
   Pressable: ({ children, accessibilityLabel, onPress, ..._props }: any) => {

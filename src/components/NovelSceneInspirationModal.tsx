@@ -1,7 +1,8 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { TaskModelSelector } from '@/components/TaskModelSelector';
 import { Spacing } from '@/constants/theme';

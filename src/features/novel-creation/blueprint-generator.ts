@@ -1,3 +1,4 @@
+import { parseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage } from '../../services/llm';
 import type { ApiSettings } from '../../types/tavern';
 import { asRecord, asString } from '../../utils/helpers';
@@ -22,19 +23,7 @@ function hasNovelScaleCapacity(blueprint: StoryBlueprint) {
 }
 
 function parseJson(content: string): unknown {
-  const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const candidates = [cleaned];
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1));
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate) as unknown;
-    } catch {
-      // Try the next bounded JSON candidate.
-    }
-  }
-  throw new Error('AI 返回的故事方案无法解析，请重试。');
+  return parseAiJson(content);
 }
 
 export function normalizeBlueprintProposals(value: unknown): StoryBlueprint[] {
@@ -126,22 +115,28 @@ export async function generateBlueprintProposals({
     temperature: Math.max(0.8, Math.min(apiSettings.temperature, 1.05)),
   };
   const first = await requestCompletionWithUsage({ ...settings, messages: baseMessages });
-  let proposals = normalizeBlueprintProposals(parseJson(first.content));
+  let proposals: StoryBlueprint[] = [];
+  try { proposals = normalizeBlueprintProposals(parseJson(first.content)); } catch { /* Repair malformed output below. */ }
   if (proposals.length >= 3) return proposals;
 
-  const repaired = await requestCompletionWithUsage({
-    ...settings,
-    temperature: Math.min(settings.temperature, 0.75),
-    messages: [
-      ...baseMessages,
-      { role: 'assistant', content: first.content },
-      {
-        role: 'user',
-        content: '上次方案未达到长篇承载标准。请重新完整输出 3 份蓝图：每份都要有具体的可再生故事引擎、至少 3 个内容不同且足够具体的卷级阶段、至少 3 条独立长期线索。不要解释，只输出完整 JSON。',
-      },
-    ],
-  });
-  proposals = normalizeBlueprintProposals(parseJson(repaired.content));
-  if (proposals.length < 3) throw new Error('模型没有生成足够完整的长篇方案，请补充题材或人物方向后重试。');
+  try {
+    const repaired = await requestCompletionWithUsage({
+      ...settings,
+      temperature: Math.min(settings.temperature, 0.75),
+      messages: [
+        ...baseMessages,
+        { role: 'assistant', content: first.content },
+        {
+          role: 'user',
+          content: '上次方案未达到长篇承载标准，或 JSON 格式不完整。保留已有完整方案，仅补齐缺失内容并修复格式，完整输出最多 3 份蓝图：每份都要有具体的可再生故事引擎、至少 3 个内容不同且足够具体的卷级阶段、至少 3 条独立长期线索。不要解释，只输出完整 JSON。',
+        },
+      ],
+    });
+    const additions = normalizeBlueprintProposals(parseJson(repaired.content));
+    proposals = [...proposals, ...additions.filter((item) => !proposals.some((saved) => saved.title === item.title))].slice(0, 3);
+  } catch (error) {
+    if (proposals.length === 0) throw error;
+  }
+  if (proposals.length === 0) throw new Error('模型没有生成可用的长篇方案，请补充题材或人物方向后重试。');
   return proposals;
 }

@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage, type ContextHistoryMessage } from '@/services/llm';
 import { buildNovelCharacterContext } from '@/utils/novel-narrative-context';
 import {
@@ -51,22 +52,7 @@ function list(value: unknown, limit = 12): string[] {
 }
 
 function extractJsonObject(value: string): unknown {
-  const source = value.trim();
-  const candidates = [source];
-  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
-  const start = source.indexOf('{');
-  const end = source.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(source.slice(start, end + 1));
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
+  return tryParseAiJson(value) ?? null;
 }
 
 export function normalizeNovelCharacterBrief(value: unknown): NovelCharacterBrief | null {
@@ -185,7 +171,7 @@ export async function generateNovelCharacterBrief({
     throw new Error('当前小说没有可供 Character 使用的角色卡。');
   }
 
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json', validateJson: (value) => Boolean(normalizeNovelCharacterBrief(value)),
     apiSettings: {
       ...apiSettings,
       streamingEnabled: false,

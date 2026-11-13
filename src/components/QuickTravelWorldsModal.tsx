@@ -1,5 +1,6 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardSafeModal } from '@/components/ui/KeyboardSafeModal';
 
 import { ThemedText } from '@/components/themed-text';

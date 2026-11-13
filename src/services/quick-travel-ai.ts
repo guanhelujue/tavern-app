@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage } from '@/services/llm';
 import type { ApiSettings } from '@/types/tavern';
 import type { OriginalPlot } from '@/types/quick-travel';
@@ -11,36 +12,8 @@ type QuickTravelAiUsage = {
 const JSON_RETRY_HINT =
   '（上次输出未通过 JSON 校验。请重新输出：只输出合法的纯 JSON 对象，不要包含任何解释、注释、代码块标记或多余文字。）';
 
-function looksLikeTruncatedJson(text: string) {
-  const open = (text.match(/\{/g) ?? []).length;
-  const close = (text.match(/\}/g) ?? []).length;
-  return open > close || (text.includes('{') && !text.trimEnd().endsWith('}'));
-}
-
 function extractJsonObject(text: string): unknown {
-  const trimmed = text.trim();
-  const candidates: string[] = [trimmed];
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
-
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
-
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  if (looksLikeTruncatedJson(trimmed) || /unexpected end of/i.test(message)) {
-    throw new Error('模型返回的 JSON 不完整（输出被截断）。请重试一次。');
-  }
-  throw new Error('模型未返回可解析的 JSON。');
+  return tryParseAiJson(text) ?? null;
 }
 
 function resolveMaxTokens(value: number | undefined, fallback: number) {
@@ -84,7 +57,7 @@ async function requestQuickTravelJson({
     temperature,
   } satisfies ApiSettings;
   const run = (content: string) =>
-    requestCompletionWithUsage({
+    requestCompletionWithUsage({ responseFormat: 'json',
       apiSettings: settings,
       maxTokens,
       temperature,

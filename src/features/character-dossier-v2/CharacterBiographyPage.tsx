@@ -1,3 +1,4 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -5,7 +6,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';

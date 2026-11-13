@@ -1,32 +1,10 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestPlainCompletion } from '@/services/llm';
 import type { ApiSettings, Novel } from '@/types/tavern';
 import { stripStatusBarFromAssistantContent } from '@/utils/status-bar-html';
 
 function extractJsonObject(text: string): unknown {
-  const trimmed = text.trim();
-  const candidates: string[] = [trimmed];
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-
-  if (fenced) {
-    candidates.push(fenced);
-  }
-
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-
-  if (start >= 0 && end > start) {
-    candidates.push(trimmed.slice(start, end + 1));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // try next
-    }
-  }
-
-  throw new Error('模型未返回可解析的 JSON。');
+  return tryParseAiJson(text) ?? null;
 }
 
 function normalizeRoutes(raw: unknown): string[] {
@@ -66,7 +44,7 @@ export async function generateSuggestedRoutes({
   const midMemory = (midTermMemories ?? []).slice(-3).join('\n');
   const shortMemory = shortTermMemories.slice(-5).join('\n');
 
-  const raw = await requestPlainCompletion({
+  const raw = await requestPlainCompletion({ responseFormat: 'json', validateJson: (value) => normalizeRoutes(value).length > 0,
     apiSettings: {
       ...apiSettings,
       streamingEnabled: false,

@@ -1,7 +1,8 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { router, type Href } from 'expo-router';
 import { useNavigation, usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NovelImagePickerField } from '@/components/NovelImagePickerField';

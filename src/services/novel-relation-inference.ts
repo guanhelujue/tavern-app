@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { normalizeRelationGraphLabel } from '@/constants/novel-relation-graphs';
 import { requestCompletionWithUsage } from '@/services/llm';
 import type { ApiSettings, Novel, NovelCastCharacter, NovelCastRelation } from '@/types/tavern';
@@ -74,22 +75,7 @@ function text(value: unknown, max = 280): string {
 }
 
 function extractJsonObject(value: string): unknown {
-  const source = value.trim();
-  const candidates = [source];
-  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
-  const start = source.indexOf('{');
-  const end = source.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(source.slice(start, end + 1));
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
+  return tryParseAiJson(value) ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -243,7 +229,7 @@ export async function inferNovelCastRelations({
     },
     cast: buildCastPayload(cast),
   };
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json',
     apiSettings: {
       ...apiSettings,
       streamingEnabled: false,

@@ -35,6 +35,31 @@ afterEach(() => {
 });
 
 describe('character portrait analysis', () => {
+  it('repairs a malformed vision JSON response without sending the image again', async () => {
+    const current = {
+      id: 'character-repair', name: '', profession: '', gender: '女', age: '22',
+      height: '', weight: '', birthplace: '', affiliation: '', appearance: '',
+      personality: '', speechStyle: '', background: '', motive: '', strengths: '',
+      weaknesses: '', portraitUri: 'file:///portrait.jpg',
+      dossierV2: createCharacterDossierV2({ gender: '女' }),
+    };
+    const repaired = { cast: { name: '林澈', gender: '女', appearance: '短发' }, dossierV2: { version: 2, public: {}, private: null }, aiSummary: { version: 1, privateFacts: [] } };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"cast":{"name":"林澈"},"dossierV2":{' } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(repaired) } }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await analyzeCharacterPortrait({ apiSettings, imageUri: current.portraitUri, current, novelName: '测试小说' });
+    expect(result.character.name).toBe('林澈');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(firstBody.messages[1].content[1].type).toBe('image_url');
+    expect(secondBody.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'assistant', content: expect.stringContaining('林澈') }),
+    ]));
+  });
+
   it('fills inferred private dossier fields when NSFW mode is enabled', async () => {
     const current = {
       id: 'character-1',

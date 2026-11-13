@@ -1,4 +1,5 @@
-import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
 import { ThemedText } from '@/components/themed-text';

@@ -65,4 +65,13 @@ describe('novel prompt authority in chapter writing', () => {
     const messages = completion.mock.calls[0][0];
     expect(messages[0].content).toContain(customPrompt);
   });
+
+  it('repairs an audit with missing fields before it can pass a chapter', async () => {
+    const completion = vi.fn<LlmCompletion>().mockResolvedValueOnce({ content: '{}' })
+      .mockResolvedValueOnce({ content: '{"score":40,"issues":[]}' });
+    const result = await auditRewriteChapter({ ...input, chapter, completion });
+    expect(completion).toHaveBeenCalledTimes(2);
+    expect(result.passed).toBe(false);
+    expect(chapter.content).toBe('我打开信箱。');
+  });
 });

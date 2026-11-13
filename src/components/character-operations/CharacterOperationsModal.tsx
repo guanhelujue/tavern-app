@@ -1,12 +1,11 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useMemo, useState } from 'react';
 import {
   FlatList,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';

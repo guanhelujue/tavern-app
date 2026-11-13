@@ -84,10 +84,8 @@ describe('character biography generation', () => {
   });
 
   it.each([
-    ['literal newlines', '{"title":"雨夜","content":"他站在屋檐下。\n雨落了一整夜。"}'],
     ['unescaped quotes', '{"title":"雨夜","content":"他说"回去吧"。"}'],
     ['plain text', '雨夜\n\n他站在屋檐下。'],
-    ['invalid fenced JSON', '```json\n{"title":"雨夜","content":"第一段\n第二段"}\n```'],
     ['two pieces', '{"title":"一","content":"第一篇"}\n{"title":"二","content":"第二篇"}'],
     ['an array of pieces', '[{"title":"一","content":"第一篇"},{"title":"二","content":"第二篇"}]'],
     ['different field names', '{"标题":"雨夜","正文":"他站在屋檐下。"}'],
@@ -102,6 +100,14 @@ describe('character biography generation', () => {
       promptTokens: 120, completionTokens: 80,
     });
     expect(mockedCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['{"title":"雨夜","content":"第一段\n第二段"}'],
+    ['```json\n{"title":"雨夜","content":"第一段\n第二段"}\n```'],
+  ])('recovers literal newlines without losing prose', async (content) => {
+    mockedCompletion.mockResolvedValue({ content });
+    expect(await generateCharacterBiography(input)).toMatchObject({ title: '雨夜', content: '第一段\n第二段', usedRawResponse: false });
   });
 
   it('still extracts a valid fenced JSON response', async () => {

@@ -1,5 +1,6 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Fonts } from '@/constants/theme';
@@ -85,5 +86,4 @@ const styles = StyleSheet.create({
   binding: { position: 'absolute', top: 0, bottom: 0, left: 7, right: 7, borderLeftWidth: 1, borderRightWidth: 1, opacity: 0.42 }, endRule: { width: 78, height: 5, borderTopWidth: 1, borderBottomWidth: 1, marginTop: 20, opacity: 0.6 }, bottomRule: { position: 'absolute', bottom: 20, marginTop: 0 },
   chapterNumber: { fontFamily: Fonts.serif, fontSize: 17, lineHeight: 25, marginTop: 44, fontWeight: '500' }, divider: { width: 24, height: 1, marginTop: 24, marginBottom: 24 },
   verticalTitle: { flexDirection: 'row-reverse', justifyContent: 'center', gap: 8 }, titleColumn: { fontFamily: Fonts.serif, fontSize: 30, lineHeight: 34, textAlign: 'center', fontWeight: '500' }, longTitle: { fontSize: 24 },
-  empty: { paddingHorizontal: 36, paddingVertical: 14 }, footer: { paddingHorizontal: 36, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }, arrow: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-});
+  empty: { paddingHorizontal: 36, paddingVertical: 14 }, footer: { paddingHorizontal: 36, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }, arrow: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' } });

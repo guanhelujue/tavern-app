@@ -11,6 +11,8 @@ import type {
   NovelStoryAnalysis,
 } from '@/types/tavern';
 import type { LlmCompletion, LlmMessage } from '@/services/novel-story-state';
+import { extractAiJsonObject } from '@/utils/ai-json';
+import { recoverStructuredResponse } from '@/services/structured-response';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 严格校验 —— 路线推演输出非法则整批丢弃
@@ -153,37 +155,20 @@ export type ForecastModelOutput = {
 };
 
 export function parseForecastOutput(raw: string, expectedCount: number): ForecastModelOutput {
-  const jsonSlice = extractJsonObject(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonSlice);
-  } catch (error) {
-    throw new Error(`路线推演输出不是合法 JSON：${String(error)}`);
-  }
-  if (!isPlainObject(parsed) || !Array.isArray(parsed.routes)) {
+  const parsed = extractAiJsonObject(raw);
+  if (!parsed || !Array.isArray(parsed.routes)) {
     throw new Error('路线推演输出缺少 routes 数组');
   }
   const routes = parsed.routes as unknown[];
-  if (routes.length < FORECAST_MIN_ROUTES || routes.length > FORECAST_MAX_ROUTES) {
-    throw new Error(`路线推演输出 routes 数量须在 ${FORECAST_MIN_ROUTES}-${FORECAST_MAX_ROUTES}`);
-  }
+  const validRoutes: NovelForecastRoute[] = [];
+  routes.forEach((item, index) => {
+    try { validRoutes.push(parseRoute(item, `route-${index + 1}`)); } catch { /* retain valid siblings */ }
+  });
+  if (validRoutes.length === 0) throw new Error('路线推演输出没有可用路线');
   void expectedCount;
   return {
-    routes: routes.map((item, index) => parseRoute(item, `route-${index + 1}`)),
+    routes: validRoutes.slice(0, FORECAST_MAX_ROUTES),
   };
-}
-
-function extractJsonObject(value: string): string {
-  const cleaned = value
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    return cleaned;
-  }
-  return cleaned.slice(start, end + 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +330,15 @@ export async function generateForecastRoutes(
     { role: 'user', content: userPrompt },
   ];
 
-  const result = await options.completion(messages, 'story-forecast');
+  const first = await options.completion(messages, 'story-forecast');
+  const result = await recoverStructuredResponse(first, {
+    validate: (value) => { parseForecastOutput(JSON.stringify(value), FORECAST_MIN_ROUTES); return true; },
+    repair: async (repairPrompt) => options.completion([
+      ...messages,
+      { role: 'assistant', content: first.content },
+      { role: 'user', content: repairPrompt },
+    ], 'story-forecast-repair'),
+  });
   const parsed = parseForecastOutput(result.content, FORECAST_MIN_ROUTES);
   const now = new Date().toISOString();
 

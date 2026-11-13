@@ -1,5 +1,6 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';

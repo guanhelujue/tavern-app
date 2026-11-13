@@ -1,6 +1,7 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { NovelStoryMemoryModal } from '@/components/NovelStoryMemoryModal';
 import { WorkbenchPanel } from '@/components/novel-continue/WorkbenchPanel';

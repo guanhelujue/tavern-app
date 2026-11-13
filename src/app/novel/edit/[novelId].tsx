@@ -1,3 +1,4 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useNavigation, usePreventRemove } from 'expo-router/react-navigation';
 import { ENABLE_QUICK_TRAVEL } from '@/config/build-features';
@@ -6,10 +7,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -283,7 +282,7 @@ function LegacyEditNovelScreen() {
     <ThemedView decorated={Platform.OS === 'web'} style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.flex}>
           {Platform.OS !== 'web' ? <NovelMobileNavigation novelId={novel.id} title="作品设定" /> : null}
           <ScrollView

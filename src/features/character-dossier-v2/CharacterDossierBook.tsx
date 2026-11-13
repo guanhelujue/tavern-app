@@ -1,3 +1,4 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { Image } from 'expo-image';
 import {
   createContext,
@@ -14,7 +15,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';

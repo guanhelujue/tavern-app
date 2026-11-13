@@ -24,6 +24,7 @@ describe('planning generator', () => {
     const session: PlanningSession = { ...createPlanningSession({ kind: 'creation', id: 'c' }), messages: [{ id: 't-user', role: 'user', content: 'x' }] };
     const next = await updatePlanningMemory({ apiSettings, session, prompt: 'x', reply: '好', turnId: 't', maxTokens: 500 });
     expect(next.messages).toEqual(session.messages); expect(next.items.some((item) => item.text === '新设定')).toBe(true);
+    expect(vi.mocked(requestCompletionWithUsage).mock.calls.at(-1)![0].responseFormat).toBe('json');
   });
   it('generates from confirmed items only', async () => {
     vi.mocked(requestCompletionWithUsage).mockResolvedValue({ content: '{"title":"x"}' } as any);

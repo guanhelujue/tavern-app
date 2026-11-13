@@ -1,3 +1,4 @@
+import { inspectAiJson } from '@/utils/ai-json';
 import { isTruncationFinishReason, requestCompletionWithUsage } from './llm';
 import type { CharacterDossierV2 } from '../types/character-dossier-v2';
 import type { ApiSettings, ContentStyleSettings, NovelCastCharacter } from '../types/tavern';
@@ -19,21 +20,12 @@ export const CHARACTER_BIOGRAPHY_SYSTEM_PROMPT = `你是一名擅长人物塑造
 
 function extractBiographyPayload(content: string) {
   if (!content.trim()) throw new Error('模型没有返回小传正文，请重新生成。');
-  const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  const candidates = [cleaned, start >= 0 && end > start ? cleaned.slice(start, end + 1) : ''];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    try {
-      const raw = asRecord(JSON.parse(candidate));
-      const title = asString(raw.title).trim();
-      const body = asString(raw.content).trim();
-      if (body) return { title: title || '未命名小传', content: body, usedRawResponse: false };
-    } catch {
-      // Try the bounded JSON candidate next.
-    }
-  }
+  const inspected = inspectAiJson(content);
+  const remainder = inspected.remainder?.replace(/```/g, '').trim();
+  const raw = asRecord(inspected.value);
+  const title = asString(raw.title).trim();
+  const body = asString(raw.content).trim();
+  if (body && !remainder) return { title: title || '未命名小传', content: body, usedRawResponse: false };
   // Keep the complete response (including fences or multiple pieces) for manual editing.
   return { title: '未命名小传', content, usedRawResponse: true };
 }

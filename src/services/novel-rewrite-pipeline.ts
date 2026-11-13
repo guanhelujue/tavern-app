@@ -1,3 +1,5 @@
+import { inspectAiJson, parseAiJson } from '@/utils/ai-json';
+import { recoverStructuredResponse } from '@/services/structured-response';
 import { resolveNovelSystemPrompt } from '@/constants/novel-memory';
 import { REWRITE_NET_IMPROVEMENT_EPSILON, REWRITE_PASS_SCORE } from '@/constants/novel-story-state';
 import type {
@@ -388,10 +390,11 @@ export type RewriteAuditOutput = {
 };
 
 export function parseRewriteAudit(raw: string): RewriteAuditOutput {
-  const jsonSlice = extractJsonObject(raw);
+  if (inspectAiJson(raw).status === 'partial') throw new Error('审查内容被截断，需要补全后才能判断通过。');
+  const jsonSlice = raw;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonSlice);
+    parsed = parseAiJson(jsonSlice);
   } catch (error) {
     throw new Error(`审查输出不是合法 JSON：${String(error)}`);
   }
@@ -399,10 +402,8 @@ export function parseRewriteAudit(raw: string): RewriteAuditOutput {
     throw new Error('审查输出缺少 issues 数组');
   }
   const issues = parsed.issues.map((item, index) => parseAuditIssue(item, index));
-  const score =
-    typeof parsed.score === 'number' && Number.isFinite(parsed.score)
-      ? Math.max(0, Math.min(100, parsed.score))
-      : 100;
+  if (typeof parsed.score !== 'number' || !Number.isFinite(parsed.score)) throw new Error('审查结果缺少有效评分。');
+  const score = Math.max(0, Math.min(100, parsed.score));
   return { issues, score };
 }
 
@@ -459,7 +460,12 @@ export async function auditRewriteChapter(
     },
   ];
 
-  const result = await options.completion(messages, 'rewrite-audit');
+  const first = await options.completion(messages, 'rewrite-audit');
+  const result = await recoverStructuredResponse(first, {
+    allowPartial: false,
+    validate: (value) => { parseRewriteAudit(JSON.stringify(value)); return true; },
+    repair: (prompt) => options.completion([...messages, { role: 'assistant', content: first.content }, { role: 'user', content: prompt }], 'rewrite-audit-repair'),
+  });
   const parsed = parseRewriteAudit(result.content);
 
   return {
@@ -566,13 +572,15 @@ export async function extractChapterStateDelta(options: {
 
   const userPrompt = `《${options.novelName}》第${options.chapter.index}章 ${options.chapter.title}\n${options.chapter.content}\n\n请抽取本章状态增量，输出 JSON（chapter 从 1 开始即可，系统会换算绝对章节）。`;
 
-  const result = await options.completion(
-    [
+  const messages: LlmMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
-    ],
-    'story-state-delta',
-  );
+  ];
+  const first = await options.completion(messages, 'story-state-delta');
+  const result = await recoverStructuredResponse(first, {
+    validate: (value) => { parseStoryAnalysisDelta(JSON.stringify(value)); return true; },
+    repair: (prompt) => options.completion([...messages, { role: 'assistant', content: first.content }, { role: 'user', content: prompt }], 'story-state-delta-repair'),
+  });
 
   // 严格校验；解析失败不写入状态。
   const delta = parseStoryAnalysisDelta(result.content);
@@ -653,17 +661,4 @@ export function buildLayeredSummaries(rows: NovelStoryAnalysis['chapterSummaries
       stateVersion,
     },
   };
-}
-
-function extractJsonObject(value: string): string {
-  const cleaned = value
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    return cleaned;
-  }
-  return cleaned.slice(start, end + 1);
 }

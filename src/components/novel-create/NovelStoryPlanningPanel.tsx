@@ -1,7 +1,8 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useNavigation } from 'expo-router';
 import { usePreventRemove } from 'expo-router/react-navigation';
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';

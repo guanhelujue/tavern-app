@@ -1,3 +1,4 @@
+import { parseAiJson } from '@/utils/ai-json';
 import { EMPTY_STYLE_PROFILE } from '@/constants/novel-story-state';
 import type {
   ISODateString,
@@ -301,34 +302,40 @@ export type StoryAnalysisDelta = {
 };
 
 export function parseStoryAnalysisDelta(raw: string): StoryAnalysisDelta {
-  const jsonSlice = extractJsonObject(raw);
+  const jsonSlice = raw;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonSlice);
+    parsed = parseAiJson(jsonSlice);
   } catch {
     // 带原始输出预览，便于定位是「截断」还是「格式抖动」。
     const preview =
       jsonSlice.length > 300 ? `${jsonSlice.slice(0, 300)}…（后略 ${jsonSlice.length - 300} 字符）` : jsonSlice;
     throw new Error(`分析输出不是合法 JSON（共 ${jsonSlice.length} 字符，输出预览）：${preview}`);
-  }  if (!isPlainObject(parsed)) {
+  }
+  if (!isPlainObject(parsed)) {
     throw new Error('分析输出必须是 JSON 对象');
   }
 
-  return {
-    summaries: Array.isArray(parsed.summaries)
-      ? parsed.summaries.map((item) => parseSummaryRow(item, 0))
-      : [],
-    worldFacts: Array.isArray(parsed.worldFacts) ? parsed.worldFacts.map(parseWorldFact) : [],
-    characters: Array.isArray(parsed.characters) ? parsed.characters.map(parseCharacter) : [],
-    characterStates: Array.isArray(parsed.characterStates)
-      ? parsed.characterStates.map(parseCharacterState)
-      : [],
-    relationships: Array.isArray(parsed.relationships)
-      ? parsed.relationships.map(parseRelationship)
-      : [],
-    timeline: Array.isArray(parsed.timeline) ? parsed.timeline.map(parseTimelineEvent) : [],
-    plotThreads: Array.isArray(parsed.plotThreads) ? parsed.plotThreads.map(parsePlotThread) : [],
-    hooks: Array.isArray(parsed.hooks) ? parsed.hooks.map(parseHook) : [],
+  const keys = ['summaries', 'worldFacts', 'characters', 'characterStates', 'relationships', 'timeline', 'plotThreads', 'hooks'];
+  if (!keys.some((key) => Array.isArray(parsed[key]))) throw new Error('分析输出缺少状态条目。');
+  let recovered = 0;
+  let rejected = 0;
+  function rows<T>(value: unknown, parse: (item: unknown) => T): T[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+      try { const row = parse(item); recovered++; return [row]; }
+      catch { rejected++; return []; }
+    });
+  }
+  const delta: StoryAnalysisDelta = {
+    summaries: rows(parsed.summaries, (item) => parseSummaryRow(item, 0)),
+    worldFacts: rows(parsed.worldFacts, parseWorldFact),
+    characters: rows(parsed.characters, parseCharacter),
+    characterStates: rows(parsed.characterStates, parseCharacterState),
+    relationships: rows(parsed.relationships, parseRelationship),
+    timeline: rows(parsed.timeline, parseTimelineEvent),
+    plotThreads: rows(parsed.plotThreads, parsePlotThread),
+    hooks: rows(parsed.hooks, parseHook),
     styleProfile: isPlainObject(parsed.styleProfile)
       ? {
           pointOfView: requireOptionalString(parsed.styleProfile.pointOfView),
@@ -339,20 +346,11 @@ export function parseStoryAnalysisDelta(raw: string): StoryAnalysisDelta {
         }
       : { ...EMPTY_STYLE_PROFILE },
   };
+  if (rejected && !recovered) throw new Error('分析条目尚不完整，需要修复后继续。');
+  return delta;
 }
 
-function extractJsonObject(value: string): string {
-  const cleaned = value
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    return cleaned;
-  }
-  return cleaned.slice(start, end + 1);
-}
+
 
 /**
  * 把模型输出的章节号映射为绝对章节号，兼容两种输出习惯：

@@ -1,5 +1,6 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useState } from 'react';
-import { TextInput, type TextInputProps } from 'react-native';
+import { type TextInputProps } from 'react-native';
 
 /** Keeps the user's unfinished text visible while the parent normalizes its value. */
 export function DraftTextInput({ value = '', onChangeText, onFocus, onBlur, ...props }: TextInputProps) {

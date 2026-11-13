@@ -1,12 +1,11 @@
+import { KeyboardAwareScrollView as ScrollView, KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';

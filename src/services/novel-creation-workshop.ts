@@ -1,3 +1,4 @@
+import { parseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage } from '@/services/llm';
 import type {
   ApiSettings,
@@ -598,7 +599,7 @@ export async function generateNovelCreationWorkshop({
   maxTokens?: number;
   onUsage?: (usage: { promptTokens: number; completionTokens: number; modelId?: string }) => void;
 }): Promise<NovelCreationWorkshopDraft> {
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json',
     apiSettings: { ...apiSettings, streamingEnabled: false, thinkingDisabled: true },
     purpose: 'create-workshop',
     maxTokens: Math.max(700, Math.min(Math.round(maxTokens), 4000)),
@@ -609,23 +610,6 @@ export async function generateNovelCreationWorkshop({
     ],
   });
   onUsage?.({ promptTokens: result.promptTokens ?? 0, completionTokens: result.completionTokens ?? 0, modelId: result.model });
-  const cleaned = result.content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  let parsed: unknown = null;
-  const candidates = [cleaned];
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(cleaned.slice(start, end + 1));
-  for (const candidate of candidates) {
-    try {
-      const value: unknown = JSON.parse(candidate);
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        parsed = value;
-        break;
-      }
-    } catch {
-      // Try the next bounded candidate.
-    }
-  }
-  if (!parsed) throw new Error('AI 返回的创作蓝图无法解析，请重试或改用手动填写。');
+  const parsed = parseAiJson(result.content);
   return normalizeNovelCreationWorkshopDraft(parsed, answers, title, profile);
 }

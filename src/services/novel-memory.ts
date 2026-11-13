@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import {
   DEFAULT_LONG_TERM_MEMORY_PROMPT,
   DEFAULT_MID_TERM_MEMORY_PROMPT,
@@ -62,22 +63,7 @@ function isLengthOrEmptyMemoryError(error: unknown) {
 }
 
 function extractJsonObject(value: string): unknown {
-  const source = value.trim();
-  const candidates = [source];
-  const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
-  const start = source.indexOf('{');
-  const end = source.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(source.slice(start, end + 1));
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
+  return tryParseAiJson(value) ?? null;
 }
 
 function text(value: unknown, max = 2400): string {
@@ -403,7 +389,7 @@ export async function refreshNovelMemoryAndSummaryAfterTurn({
     { role: 'system', content: prompt },
     { role: 'user', content: payload },
   ];
-  let parsed: ParsedMemoryAndSummary | null;
+  let parsed: ParsedMemoryAndSummary | null = null;
   try {
     const raw = await requestMemoryPlainCompletion({
       apiSettings,
@@ -413,9 +399,9 @@ export async function refreshNovelMemoryAndSummaryAfterTurn({
       messages,
     });
     parsed = normalizeMemoryAndSummary(extractJsonObject(raw));
-    if (!parsed) {
+    if (!parsed || !parsed.agentSummary) {
       // Some gateways report finish_reason=stop even when the JSON ends mid-string.
-      // Retry once with a shorter-output instruction; never persist a partial result.
+      // Try to fill the missing summary once; retain complete memory fields if this fails.
       const retryRaw = await requestMemoryPlainCompletion({
         apiSettings,
         maxTokens: Math.min(MEMORY_COMPLETION_ABSOLUTE_MAX, maxTokens * 2),
@@ -425,13 +411,26 @@ export async function refreshNovelMemoryAndSummaryAfterTurn({
             content: `${prompt}\n\n上一次返回的 JSON 不完整或没有有效字段。请重新生成完整、可解析的 JSON；各 summary 数组最多保留两条简短事实，并确保所有引号、数组和对象闭合。`,
           },
           { role: 'user', content: payload },
+          { role: 'assistant', content: raw },
+          { role: 'user', content: '保留已经完整的记忆字段，只修复 JSON 并补全有原文依据的摘要。' },
         ],
       });
-      parsed = normalizeMemoryAndSummary(extractJsonObject(retryRaw));
+      const repaired = normalizeMemoryAndSummary(extractJsonObject(retryRaw));
+      if (repaired) {
+        parsed = parsed
+          ? {
+              shortTermMemory: parsed.shortTermMemory || repaired.shortTermMemory,
+              midTermMemory: parsed.midTermMemory || repaired.midTermMemory,
+              longTermMemory: parsed.longTermMemory || repaired.longTermMemory,
+              agentSummary: parsed.agentSummary || repaired.agentSummary,
+            }
+          : repaired;
+      }
     }
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
     const message = error instanceof Error ? error.message : '剧情整理失败，请检查后台模型配置。';
-    throw new Error(rewriteMemoryErrorMessage(message));
+    if (!parsed) throw new Error(rewriteMemoryErrorMessage(message));
   }
 
   if (!parsed) {

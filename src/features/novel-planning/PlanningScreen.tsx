@@ -1,6 +1,7 @@
+import { KeyboardAwareTextInput as TextInput, KeyboardAwareScrollView as ScrollView } from '@/components/ui/KeyboardAwareScrollView';
 import { router, Stack, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Markdown from 'react-native-markdown-display';
 import { Fonts } from '@/constants/theme';
@@ -221,7 +222,7 @@ export default function PlanningScreen() {
   return <View style={[styles.root, { backgroundColor: theme.background }]}>
     <Stack.Screen options={{ headerShown: false }} />
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={[styles.header, compact && styles.compactHeader]}>
           <View style={styles.headerIdentity}>
             <Pressable accessibilityRole="button" accessibilityLabel="返回创建或设定页面" onPress={back} disabled={Boolean(busy)} style={({ pressed }) => [styles.iconButton, pressed && { backgroundColor: theme.subtle }]}><PlanningText style={styles.backGlyph}>‹</PlanningText></Pressable>
@@ -262,7 +263,7 @@ export default function PlanningScreen() {
           <View style={styles.composerDock}><View style={styles.chatWidth}>{composer}<PlanningText muted style={styles.composerHint}>{Platform.OS === 'web' && !compact ? 'Enter 发送，Shift + Enter 换行' : '对话与构想自动保存'}</PlanningText></View></View>
         </View>}
         <Modal visible={panelOpen} transparent animationType="fade" onRequestClose={() => setPanelOpen(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.modalOverlay, compact && styles.compactOverlay]}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.modalOverlay, compact && styles.compactOverlay]}>
             <Pressable accessibilityRole="button" accessibilityLabel="关闭面板" style={styles.modalBackdrop} onPress={() => setPanelOpen(false)} />
             <View accessibilityViewIsModal style={[styles.panel, { backgroundColor: theme.background, borderColor: theme.border }, compact && styles.compactPanel]}>
               <View style={[styles.panelHeader, { borderColor: theme.border }]}>

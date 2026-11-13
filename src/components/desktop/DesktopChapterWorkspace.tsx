@@ -1,7 +1,8 @@
+import { KeyboardAwareTextInput as TextInput, KeyboardAwareScrollView as ScrollView } from '@/components/ui/KeyboardAwareScrollView';
 import { router, useNavigation } from 'expo-router';
 import { usePreventRemove, type NavigationProp } from 'expo-router/react-navigation';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { NovelChapterEditorModal } from '@/components/novel-continue/NovelChapterEditorModal';
 import { NovelTextImportModal } from '@/components/novel-continue/NovelTextImportModal';
@@ -9,6 +10,7 @@ import { NovelMobileChapterHome } from '@/components/novel-continue/NovelMobileC
 import { ChapterBookSlips } from '@/components/desktop/ChapterBookSlips';
 import { ThemedText } from '@/components/themed-text';
 import { useDesktopLayout } from '@/hooks/use-desktop-layout';
+
 import { useTheme } from '@/hooks/use-theme';
 import { useTavernStore } from '@/store/tavern-store';
 import { TaskModelSelector } from '@/components/TaskModelSelector';

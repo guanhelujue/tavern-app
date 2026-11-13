@@ -288,9 +288,11 @@ export async function analyzeStoryStateIncrementally(
       const retryResult = await options.completion(
         [
           { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: result.content },
           {
             role: 'user',
-            content: `${userPrompt}\n\n（上次输出未通过 JSON 校验。请重新输出：只输出合法的纯 JSON 对象，不要包含任何解释、注释、代码块标记或多余文字。）`,
+            content: '上次输出未通过 JSON 校验。请修复格式并保留已经完整的字段和条目，只补足原文能够支持的缺失内容，不要编造事实。只输出完整 JSON 对象。',
           },
         ],
         'story-state-analyze-retry',

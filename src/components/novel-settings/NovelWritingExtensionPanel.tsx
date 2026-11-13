@@ -1,5 +1,6 @@
+import { KeyboardAwareTextInput as TextInput } from '@/components/ui/KeyboardAwareScrollView';
 import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 
 import { AccordionSection } from '@/components/novel-create/AccordionSection';
 import { TaskModelSelector } from '@/components/TaskModelSelector';

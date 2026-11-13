@@ -1,3 +1,4 @@
+import { tryParseAiJson } from '@/utils/ai-json';
 import { requestCompletionWithUsage } from './llm';
 import type { ApiSettings, NovelNarrativeProfile } from '../types/tavern';
 import { asRecord, asString } from '../utils/helpers';
@@ -75,28 +76,7 @@ export function normalizeNovelInspirations(value: unknown): NovelInspiration[] {
 }
 
 function extractJson(content: string): unknown {
-  const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const candidates = [cleaned];
-  const objectStart = cleaned.indexOf('{');
-  const objectEnd = cleaned.lastIndexOf('}');
-  const arrayStart = cleaned.indexOf('[');
-  const arrayEnd = cleaned.lastIndexOf(']');
-
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    candidates.push(cleaned.slice(objectStart, objectEnd + 1));
-  }
-  if (arrayStart >= 0 && arrayEnd > arrayStart) {
-    candidates.push(cleaned.slice(arrayStart, arrayEnd + 1));
-  }
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate) as unknown;
-    } catch {
-      // Try the next bounded candidate.
-    }
-  }
-  throw new Error('AI 返回的灵感无法解析，请换一批重试。');
+  return tryParseAiJson(content) ?? null;
 }
 
 export async function generateNovelInspirations({
@@ -108,7 +88,7 @@ export async function generateNovelInspirations({
   seed?: string;
   maxTokens?: number;
 }): Promise<NovelInspiration[]> {
-  const result = await requestCompletionWithUsage({
+  const result = await requestCompletionWithUsage({ responseFormat: 'json', validateJson: (value) => normalizeNovelInspirations(value).length > 0,
     apiSettings: { ...apiSettings, streamingEnabled: false, thinkingDisabled: true },
     purpose: 'create-inspiration',
     maxTokens: Math.max(900, Math.min(Math.round(maxTokens), 2600)),

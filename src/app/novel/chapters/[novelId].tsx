@@ -26,7 +26,7 @@ export default function NovelChaptersScreen() {
   if (!novel) return <NovelAvailabilityState />;
   return <SafeAreaView edges={desktop ? [] : ['top', 'bottom', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
     {!desktop && <NovelMobileNavigation novelId={novelId} />}
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <DesktopChapterWorkspace key={`${novelId}:${chapterId ?? ''}:${inspirationId ?? ''}:${outlineIndex || ''}`} novelId={novelId} chapterId={chapterId} inspirationId={inspirationId} outlineIndex={Number.isInteger(outlineIndex) && outlineIndex > 0 ? outlineIndex : undefined} />
     </KeyboardAvoidingView>
   </SafeAreaView>;

@@ -1,6 +1,7 @@
+import { KeyboardAwareTextInput as TextInput, KeyboardAwareScrollView } from '@/components/ui/KeyboardAwareScrollView';
 import { Image } from 'expo-image';
 import { useMemo, useState, type ReactNode } from 'react';
-import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { MobileAction, MobileEmptyState, MobileIcon, MobileSegmentedTabs } from '@/components/mobile/MobileUI';
 import { ThemedText } from '@/components/themed-text';
@@ -43,6 +44,7 @@ export function NovelMobileChapterHome({ name, worldName, coverUri, chapters, pl
   const actionDisabled = busy || (locked && !draft);
 
   return <FlatList accessibilityLabel="章节目录" style={styles.list} contentContainerStyle={styles.content} data={visible} keyExtractor={chapter => chapter.id}
+    renderScrollComponent={(props) => <KeyboardAwareScrollView {...props} />}
     keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={12} windowSize={7}
     ListHeaderComponent={<View>
       <View style={styles.identity}>

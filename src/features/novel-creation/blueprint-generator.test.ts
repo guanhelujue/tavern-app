@@ -114,4 +114,24 @@ describe('normalizeBlueprintProposals', () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1][0].messages.at(-1)?.content).toContain('未达到长篇承载标准');
   });
+
+  it('continues with complete proposals when only the JSON closing delimiters were truncated', async () => {
+    const request = vi.mocked(requestCompletionWithUsage);
+    request.mockReset();
+    const content = JSON.stringify({ blueprints: [0, 1, 2].map((index) => ({ ...longBlueprint, title: `方案${index}` })) });
+    request.mockResolvedValueOnce({ content: content.slice(0, -2) });
+    const proposals = await generateBlueprintProposals({ apiSettings, seed: '海港与失忆', maxTokens: 4000 });
+    expect(proposals).toHaveLength(3);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps usable proposals so the author can continue when a supplemental repair fails', async () => {
+    const request = vi.mocked(requestCompletionWithUsage);
+    request.mockReset();
+    request.mockResolvedValueOnce({ content: JSON.stringify({ blueprints: [longBlueprint] }) })
+      .mockRejectedValueOnce(new Error('network unavailable'));
+    const proposals = await generateBlueprintProposals({ apiSettings, seed: '海港与失忆', maxTokens: 4000 });
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].title).toBe(longBlueprint.title);
+  });
 });

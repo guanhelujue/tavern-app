@@ -1,5 +1,6 @@
 import type { NovelCastCharacterPrivacy, NovelStoryCharacter } from '@/types/tavern';
 import type { LlmCompletion, LlmMessage } from '@/services/novel-story-state';
+import { extractAiJsonArray } from '@/utils/ai-json';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 全文检索 —— 定位角色在原文中的出现片段（纯函数，可单测）
@@ -151,19 +152,6 @@ const PRIVACY_KEYS: (keyof NovelCastCharacterPrivacy)[] = [
   'taboo',
 ];
 
-function extractJsonArray(value: string): string {
-  const cleaned = value
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  const start = cleaned.indexOf('[');
-  const end = cleaned.lastIndexOf(']');
-  if (start === -1 || end === -1 || end <= start) {
-    return cleaned;
-  }
-  return cleaned.slice(start, end + 1);
-}
-
 function parsePrivacy(value: unknown): NovelCastCharacterPrivacy | undefined {
   if (!isPlainObject(value)) {
     return undefined;
@@ -272,6 +260,8 @@ export async function enrichCharactersFromText(params: {
   let promptTokens = 0;
   let completionTokens = 0;
   let modelId: string | undefined;
+  let completedBatches = 0;
+  const failedBatches: string[] = [];
 
   for (let offset = 0; offset < batches.length; offset += maxPerBatch) {
     const batch = batches.slice(offset, offset + maxPerBatch);
@@ -299,20 +289,28 @@ export async function enrichCharactersFromText(params: {
     ];
 
     try {
-      const result = await completion(messages, 'character-enrich');
+      let result = await completion(messages, 'character-enrich');
       promptTokens += result.promptTokens ?? 0;
       completionTokens += result.completionTokens ?? 0;
       modelId = result.modelId ?? modelId;
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(extractJsonArray(result.content));
-      } catch {
-        continue;
+      let parsed = extractAiJsonArray(result.content);
+      if (!parsed) {
+        result = await completion([
+          ...messages,
+          { role: 'assistant', content: result.content },
+          { role: 'user', content: '请只修复上一条角色档案 JSON 的格式，保留已返回的完整角色，不要编造信息；只输出完整 JSON 数组。' },
+        ], 'character-enrich-repair');
+        promptTokens += result.promptTokens ?? 0;
+        completionTokens += result.completionTokens ?? 0;
+        modelId = result.modelId ?? modelId;
+        parsed = extractAiJsonArray(result.content);
       }
       if (!Array.isArray(parsed)) {
+        failedBatches.push(batch.map((character) => character.name).join('、'));
         continue;
       }
+      completedBatches += 1;
       for (const item of parsed) {
         const partial = parseEnrichedCharacter(item, batch);
         if (partial) {
@@ -321,9 +319,12 @@ export async function enrichCharactersFromText(params: {
         }
       }
     } catch {
-      // 单批精炼失败静默跳过，不影响其它角色与主流程。
+      failedBatches.push(batch.map((character) => character.name).join('、'));
     }
   }
 
+  if (batches.length > 0 && completedBatches === 0 && failedBatches.length > 0) {
+    throw new Error(`角色档案精炼失败：${failedBatches.join('；')}。请重试。`);
+  }
   return { characters: enriched, promptTokens, completionTokens, modelId };
 }

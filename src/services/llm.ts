@@ -1,4 +1,5 @@
 import { buildWritingPromptExtensionBlocks } from '@/utils/writing-prompt-extensions';
+import { recoverStructuredResponse } from '@/services/structured-response';
 import { buildThinkingBody } from '@/utils/thinking-request';
 import {
   completeGeminiNative,
@@ -518,6 +519,7 @@ function extractAssistantReasoning(payload: {
 
 export type ChatCompletionResult = {
   content: string;
+  jsonRecovery?: { status: 'recovered' | 'repaired' | 'partial'; rawContent: string; diagnostics: string[] };
   /** Provider-returned reasoning/thinking trace. Never injected into later story context. */
   reasoningContent?: string;
   promptTokens?: number;
@@ -1394,6 +1396,9 @@ export async function requestCompletionWithUsage({
   temperature,
   stripNotice = true,
   signal,
+  responseFormat,
+  validateJson,
+  allowPartialJson,
 }: {
   apiSettings: ApiSettings;
   messages: OpenAIChatMessage[];
@@ -1407,6 +1412,10 @@ export async function requestCompletionWithUsage({
   stripNotice?: boolean;
   /** Abort an in-flight utility request together with the main novel turn. */
   signal?: AbortSignal;
+  /** Only model-authored JSON; transport responses and prose stay untouched. */
+  responseFormat?: 'json';
+  validateJson?: (value: unknown) => boolean;
+  allowPartialJson?: boolean;
 }): Promise<ChatCompletionResult> {
   const completionSettings: ApiSettings = {
     ...apiSettings,
@@ -1427,10 +1436,23 @@ export async function requestCompletionWithUsage({
       }),
   });
 
-  return {
+  const completion = {
     ...result,
     content: stripNotice ? stripTruncationNotice(result.content) : result.content.trim(),
   };
+  if (responseFormat !== 'json') return completion;
+  return recoverStructuredResponse(completion, {
+    signal,
+    allowPartial: allowPartialJson,
+    validate: validateJson ?? ((value) => value !== null && typeof value === 'object'),
+    repair: (prompt) => executeChatCompletionRequest({
+      apiSettings: { ...completionSettings, streamingEnabled: false, continuationOnTruncation: false,
+        temperature: Math.min(completionSettings.temperature, 0.3) },
+      messages: [...messages, { role: 'assistant', content: completion.content }, { role: 'user', content: prompt }],
+      purpose: `${purpose}-json-repair`,
+      signal,
+    }),
+  });
 }
 
 export async function requestPlainCompletion({
@@ -1438,13 +1460,21 @@ export async function requestPlainCompletion({
   messages,
   purpose = 'utility',
   signal,
+  responseFormat,
+  validateJson,
 }: {
   apiSettings: ApiSettings;
   messages: OpenAIChatMessage[];
   /** Terminal tag: utility-memory | utility-experience | utility-routes | … */
   purpose?: string;
   signal?: AbortSignal;
+  responseFormat?: 'json';
+  validateJson?: (value: unknown) => boolean;
 }): Promise<string> {
+  if (responseFormat === 'json') {
+    const result = await requestCompletionWithUsage({ apiSettings, messages, purpose, signal, responseFormat, validateJson });
+    return result.content;
+  }
   const plainSettings: ApiSettings = {
     ...apiSettings,
     temperature: Math.min(apiSettings.temperature, 0.6),
